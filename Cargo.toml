@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/krit_input"
+]
+
+[workspace.package]
+authors = ["Eric Kwoka <43540491+ekwoka@users.noreply.github.com>"]
+edition = "2024"
+rust-version = "1.99"
+
+[package]
+name = "krit_fps"
+description = "Components and Systems for core FPS functionality"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[workspace.dependencies]
+bevy_app = { version = "0.19", default-featuers = false }
+bevy_ecs = { version = "0.19", default-features = false }
+bevy_math = { version = "0.19", default-features = false }
+bevy_reflect = { version = "0.19", default-features = false }
+
+bevy_enhanced_input = { version = "0.26", default-features = false }
+
+
+[workspace.metadata.bin]
+cargo-make = { version = "0.37.24", locked = false }
+cargo-nextest = { version = "0.9.146", locked = true }
+cargo-watch = { version = "8.5.3", locked = true }
+
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+# Compile the entire crate as one unit.
+# Slows compile times, marginal improvements.
+codegen-units = 1
+# Do a second optimization pass over the entire program, including dependencies.
+# Slows compile times, marginal improvements.
+lto = "thin"
+# Optimize with size in mind (also try "z", sometimes it is better).
+# Slightly slows compile times, great improvements to file size and runtime performance.
+opt-level = "s"
+# Strip all debugging information from the binary to slightly reduce file size.
+strip = "debuginfo"

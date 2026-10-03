@@ -1,0 +1,15 @@
+[package]
+name = "krit_input"
+description = "Common Input Types for FPS games"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bevy_math.workspace = true
+bevy_reflect.workspace = true
+
+bevy_enhanced_input.workspace = true
