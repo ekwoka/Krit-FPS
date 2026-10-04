@@ -918,6 +918,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "krit_kamera"
+version = "0.1.0"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_enhanced_input",
+ "bevy_math",
+ "bevy_transform",
+ "krit_input",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,6 +1,7 @@
 [workspace]
 members = [
-    "crates/krit_input"
+    "crates/krit_input",
+    "crates/krit_kamera"
 ]
 
 [workspace.package]
@@ -19,12 +20,19 @@ rust-version.workspace = true
 [dependencies]
 
 [workspace.dependencies]
+# Bevy Core
 bevy_app = { version = "0.19", default-featuers = false }
 bevy_ecs = { version = "0.19", default-features = false }
 bevy_math = { version = "0.19", default-features = false }
 bevy_reflect = { version = "0.19", default-features = false }
+bevy_transform = { version = "0.19", default-features = false }
 
+# Third Party
 bevy_enhanced_input = { version = "0.26", default-features = false }
+
+# local crates
+krit_input = { path = "crates/krit_input" }
+krit_kamera = { path = "crates/krit_kamera" }
 
 
 [workspace.metadata.bin]

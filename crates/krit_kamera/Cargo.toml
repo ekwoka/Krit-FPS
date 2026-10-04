@@ -1,0 +1,17 @@
+[package]
+name = "krit_kamera"
+description = "Camera handler for Krit FPS games"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bevy_math.workspace = true
+bevy_transform.workspace = true
+
+bevy_enhanced_input.workspace = true
+
+krit_input.workspace = true

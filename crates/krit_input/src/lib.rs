@@ -23,7 +23,9 @@ use bevy_reflect::Reflect;
 pub struct KritInput;
 
 impl Plugin for KritInput {
-    fn build(&self, app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        app.add_plugins(KritInputAccumulation);
+    }
 }
 
 /// Plugin for Accumulating Inputs
