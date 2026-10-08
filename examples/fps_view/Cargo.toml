@@ -1,0 +1,20 @@
+[package]
+name = "fps_view"
+description = "Simple FPS View and Controller"
+version = "0.0.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy = { workspace = true, default-features = true, features = [
+    "serialize",
+    "bevy_ui_debug",
+    "x11",
+    "bevy_feathers"
+] }
+
+bevy_enhanced_input.workspace = true
+
+krit_input.workspace = true
+krit_kamera.workspace = true

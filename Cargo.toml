@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "crates/krit_input",
-    "crates/krit_kamera"
+    "crates/krit_kamera",
+    "examples/fps_view"
 ]
 
 [workspace.package]
@@ -21,7 +22,8 @@ rust-version.workspace = true
 
 [workspace.dependencies]
 # Bevy Core
-bevy_app = { version = "0.19", default-featuers = false }
+bevy = { version = "0.19", default-features = false }
+bevy_app = { version = "0.19", default-features = false }
 bevy_ecs = { version = "0.19", default-features = false }
 bevy_math = { version = "0.19", default-features = false }
 bevy_reflect = { version = "0.19", default-features = false }
