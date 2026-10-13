@@ -22,15 +22,15 @@ rust-version.workspace = true
 
 [workspace.dependencies]
 # Bevy Core
-bevy = { version = "0.19", default-features = false }
-bevy_app = { version = "0.19", default-features = false }
-bevy_ecs = { version = "0.19", default-features = false }
-bevy_math = { version = "0.19", default-features = false }
-bevy_reflect = { version = "0.19", default-features = false }
-bevy_transform = { version = "0.19", default-features = false }
+bevy = { version = "0.20", default-features = false }
+bevy_app = { version = "0.20", default-features = false }
+bevy_ecs = { version = "0.20", default-features = false }
+bevy_math = { version = "0.20", default-features = false }
+bevy_reflect = { version = "0.20", default-features = false }
+bevy_transform = { version = "0.20", default-features = false }
 
 # Third Party
-bevy_enhanced_input = { version = "0.26", default-features = false }
+bevy_enhanced_input = { git = "https://github.com/simgine/bevy_enhanced_input", default-features = false }
 
 # local crates
 krit_input = { path = "crates/krit_input" }

@@ -36,13 +36,13 @@ fn spawn_world(
         DirectionalLight {
             shadow_maps_enabled: true
         }
-        template_value(CascadeShadowConfigBuilder {
+        CascadeShadowConfigBuilder {
             num_cascades: 1,
             minimum_distance: 600.0,
             maximum_distance: 1000.0,
             ..default()
         }
-        .build())
+        .build()
         // Initial orientation: morning sun low in the east.
         Transform::from_rotation(Quat::from_euler(
             EulerRot::YXZ,
