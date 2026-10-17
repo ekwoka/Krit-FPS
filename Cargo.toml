@@ -31,6 +31,7 @@ bevy_transform = { version = "0.20", default-features = false }
 
 # Third Party
 bevy_enhanced_input = { version = "0.27", default-features = false }
+avian3d = { git = "https://github.com/andriyDev/avian", branch = "bevy-0.20" }
 
 # local crates
 krit_input = { path = "crates/krit_input" }

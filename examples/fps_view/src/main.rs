@@ -1,8 +1,4 @@
-use bevy::{
-    ecs::{lifecycle::HookContext, world::DeferredWorld},
-    light::CascadeShadowConfigBuilder,
-    prelude::*,
-};
+use bevy::{light::CascadeShadowConfigBuilder, prelude::*};
 use bevy_enhanced_input::prelude::*;
 use krit_input::{KritInput, RotateCamera};
 use krit_kamera::{ControllerCamera, KritKamera};
@@ -63,6 +59,7 @@ fn spawn_world(
         // Character
         #Player
         Player
+        @player_context()
         Transform::from_xyz(0.0, 0.0, 0.0)
         ControllerCamera[
             Camera3d
@@ -71,19 +68,17 @@ fn spawn_world(
 }
 
 #[derive(Component, Default, Clone)]
-#[component(on_add = on_add_player_context)]
 struct Player;
 
-fn on_add_player_context(mut world: DeferredWorld, context: HookContext) {
-    world
-        .commands()
-        .entity(context.entity)
-        .insert(actions!(Player[
-            (
-                Action::<RotateCamera>::new(),
-                Bindings::spawn(Spawn(Binding::mouse_motion()))
-            ),
-        ]));
+fn player_context() -> impl Scene {
+    bsn! {
+        Actions<Player> [
+            Action::<RotateCamera>::new()
+            Bindings [
+                Binding::mouse_motion()
+            ]
+        ]
+    }
 }
 
 fn solid(color: Color) -> StandardMaterial {
