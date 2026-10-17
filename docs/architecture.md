@@ -210,8 +210,9 @@ pub enum KritViewSystems { SyncFromSim, CameraEffects, ViewModel, Feedback }
 - Inside each crate, sub-sets are public (for example `WeaponSystems::{FireControl, Reload, Spread, Recoil}`)
   so individual behaviours can be removed with `App::remove_systems_in_set` or have systems inserted
   between them.
-- **Bridge between frame rate and tick rate**: `krit_input` writes the latest absolute aim every
-  frame and ORs button state into a *latched* held mask, so a tap shorter than one tick still lands
+- **Bridge between frame rate and tick rate**: `krit_input` sums look input into `LocalAim` every
+  frame and copies it, quantized, into `CharacterIntent.aim` at the start of each tick (§5.3,
+  §6.2). It also ORs button state into a *latched* held mask, so a tap shorter than one tick still lands
   on a tick. The latch clears in `RunFixedMainLoopSystems::AfterFixedMainLoop`, and only if a fixed
   tick actually ran that frame (the bevy_ahoy pattern). This fixes the double-tick bug described in
   §7.
@@ -281,7 +282,7 @@ configuration, edge derivation and generic gate application.
 | `tick` | `SimTick(u32)` resource, incremented in `KritSimSystems::Intent`. Every message carries a tick. `krit_net` aliases it to the network tick rather than running two counters. |
 | `entity` | `Player`, `Character`, the relationship `Controls(Entity)` ↔ `ControlledBy`, `Owner` / `Instigator` relationship for spawned things (projectiles, grenades). `SimId(u64)`: a network-stable id assigned by the authority, used for keys and ordering. `PersistentId` for authored level entities. |
 | `intent` | `CharacterIntent` (see §6.1), `Buttons` bitflags (held), `PrevButtons` and `ButtonEdges` (derived in sim), `ItemIntent`, `CharacterIntent::inert()` |
-| `aim` | `ViewAngles { yaw, pitch }`, `ViewAngleOffset` (sim-forced facing on spawn/teleport), `AimRecoil { pitch, yaw }` (aim-affecting, additive), `EyeHeight`, `AimRay { origin, dir }` helper that includes `AimRecoil` |
+| `aim` | `ViewAngles { yaw: u32, pitch: i32 }` (binary angles, 2³² per turn; §6.2.1), `LocalAim { yaw, pitch }` (client-only `f32` input accumulator, written only by `krit_input`), `ViewAngleOffset { yaw: u32, pitch: i32 }` (sim-forced facing: spawn, teleport, scripted look, platform yaw; never input), `PITCH_LIMIT` (shared pitch clamp, just under 90°), `AimRecoil { pitch, yaw }` (aim-affecting, additive, decays), `EyeHeight`, `AimRay { origin, dir }` helper that includes `AimRecoil`, and shortest-angle and quantize helpers. The layering is in §6.2. |
 | `gates` | `ActionGates` as a component: block bits (`MOVE`, `LOOK`, `FIRE`, `ADS`, `SPRINT`, `INTERACT`, `SWITCH`, `RELOAD`, plus game-defined bits), and `forced` / `disabled` `Buttons` masks applied to the intent in `Intent`. Domains *contribute*; consumers *query*. A debug build records which plugin set each bit. Cancel rules live in `ActionRules` (§5.6). |
 | `authority` | `SimAuthority`, `SimReplay`, `has_authority`, `first_time_simulated` (§4.2) |
 | `team` | `TeamId`, `Team` component, the `TeamRelations` resource trait (`relation(a, b) -> Relation::{Self_, Friendly, Neutral, Hostile}`) with a default impl |
@@ -342,8 +343,9 @@ make movement depend on weapons.
 - default input contexts and bindings, including a policy for one gamepad button shared by reload and
   interact;
 - `InputSettings` (sensitivity, invert, ADS sensitivity mode, toggle-vs-hold per action);
-- the client-side aim accumulator: `aim = clamp(aim + look_delta × sensitivity)`, kept on the
-  Character as `LocalAim` (not sim state);
+- the client-side aim accumulator systems. The `LocalAim` type lives in `krit_core` so
+  `krit_kamera` can read it without importing this crate. It is not sim state and never replicated,
+  and it holds only the player's own look input (§6.2);
 - frame-to-tick button latching (§4);
 - `InputGlyphs`, a read model naming the current binding for each action, for prompts.
 
@@ -368,9 +370,21 @@ input contexts on equip by listening to `krit_equipment`'s `Equipped` event in a
 observer, rather than equipment importing BEI. The UE5 First Person template does the same with its
 weapon-owned `FireMappingContext`.
 
-**Server-forced aim:** when simulation changes `ViewAngleOffset` (spawn, teleport, scripted look),
-`krit_input` rebases `LocalAim` so that the next intent continues from the new facing. This is Q3's
-`delta_angles` / Source's `fixangle`.
+**Aim accumulation:**
+1. **Every frame** (`PreUpdate`, after BEI): read `Action<RotateCamera>` in a system, scale it by
+   `InputSettings`, and add it to `LocalAim`. Yaw wraps. Pitch is clamped against `PITCH_LIMIT` in
+   `ViewAngles` space (§6.2). Mouse deltas are already distances, so they are not multiplied by
+   `dt`. Gamepad sticks are rates, so their bindings carry a delta-time BEI modifier, and this system
+   handles both devices the same way.
+2. **Every tick, before the simulation** (`FixedPreUpdate`): write the quantized `LocalAim` into
+   `CharacterIntent.aim`. If several ticks run in one frame they share that aim. If no tick runs,
+   `LocalAim` keeps accumulating and nothing is lost. Writing in the fixed schedule, rather than
+   once per frame, keeps `intent.aim` equal to the aim the latest tick actually used. The camera's
+   pending term (§5.12) depends on that.
+
+**Server-forced aim:** `krit_input` does nothing special. The simulation expresses forced facing
+(spawn, teleport, scripted look) through `ViewAngleOffset`, and `LocalAim` is never rebased. This is
+Q3's `delta_angles`.
 
 ### 5.4 `krit_movement`: character motion
 
@@ -391,8 +405,9 @@ weapon-owned `FireMappingContext`.
 - `Stamina`;
 - `MovementStats`, computed through `krit_stats`;
 - capsule height changes;
-- the Aim stage: `ViewAngles = intent.aim + ViewAngleOffset`, pitch clamped, and `AimRecoil`
-  recovery. `AimRecoil` is never folded into `ViewAngles`; `AimRay` adds it.
+- the Aim stage: `ViewAngles = intent.aim + ViewAngleOffset` (yaw wrapping; pitch saturating, then
+  clamped to `±PITCH_LIMIT`; §6.2.1), recomputed from scratch every tick, plus `AimRecoil` recovery. `AimRecoil` is never folded into
+  `ViewAngles`; `AimRay` adds it. The stage writes neither `LocalAim` nor `intent.aim` (§6.2).
 
 **The collide-and-slide algorithm is owned here**, not in the backend (P9). It is a port of the
 Quake/Source `TryPlayerMove` / `ClipVelocity` / `StepMove` / `StayOnGround` family (and of
@@ -773,11 +788,19 @@ Single-player campaigns usually use `krit_match` only for spawns, respawn and ob
 - `CameraSettings`, which includes motion-reduction options.
 
 **Displayed aim:** the camera shows `ViewAngles + AimRecoil + (LocalAim − intent.aim)`, that is,
-the simulated aim plus the mouse movement that has not reached a tick yet. Mouse look therefore
-updates every frame, while shots still use the tick's `ViewAngles`. On a remote or headless view the
-pending term is zero.
+the simulated aim plus the mouse movement that has not reached a tick yet (the pending term, which
+also absorbs quantization rounding). Visual-only layers (`ViewKick`, shake, lean) are added on top
+in `CameraEffects`. Mouse look therefore updates every frame, while shots still use the tick's
+`ViewAngles`. Details:
+- For the locally controlled Character, `ViewAngles` and `AimRecoil` are read from the latest tick,
+  **not interpolated**. The pending term is measured from that tick's `intent.aim`, so interpolating
+  the base would make the view lag behind the mouse.
+- The pending difference uses the shortest signed angle, because `LocalAim.yaw` wraps.
+- On a remote, bot or headless view there is no `LocalAim`. The pending term is zero, and
+  `ViewAngles` may be interpolated like the `Transform`.
+- The camera never writes back into `LocalAim`, `ViewAngles` or `AimRecoil` (§6.2).
 
-**Consumes:** `ViewAngles`, `AimRecoil`, `LocalAim`, `EyeHeight` and the character `Transform`
+**Consumes:** `ViewAngles`, `AimRecoil`, `LocalAim`, `CharacterIntent.aim`, `EyeHeight` and the character `Transform`
 (interpolated); `MovementState`, `KinematicState`, `Landed`, `WeaponFired`, `AdsState`,
 `LastDamageTaken` and `LifeState`.
 
@@ -928,7 +951,7 @@ in `krit_core` unless noted. Field lists are indicative; the tick and entity fie
 #[derive(Component, Clone, Default, Reflect, PartialEq)]
 pub struct CharacterIntent {
     pub move_axis: Vec2,          // local X/Z, length ≤ 1
-    pub aim: ViewAngles,          // absolute yaw/pitch, sensitivity already applied, pre-offset
+    pub aim: ViewAngles,          // absolute; u32 yaw, i32 pitch (§6.2.1); sensitivity applied, pre-offset
     pub buttons: Buttons,         // held state, latched so sub-tick taps are not lost
     pub select: Option<SlotSelect>,
     pub view_time: ViewTime,      // the tick + fraction the client was displaying (lag comp)
@@ -942,7 +965,8 @@ pub struct PrevButtons(pub Buttons);
 pub struct ButtonEdges { pub pressed: Buttons, pub released: Buttons }
 ```
 
-Bots write `CharacterIntent` directly. They use `ViewAngles` as their absolute aim.
+Bots write `CharacterIntent` directly and have no `LocalAim`. `intent.aim` is pre-offset, so a bot
+that wants to face `target` writes `intent.aim = target − ViewAngleOffset`.
 
 | Boundary | Direction | Contract | Mechanism |
 |---|---|---|---|
@@ -954,13 +978,150 @@ Bots write `CharacterIntent` directly. They use `ViewAngles` as their absolute a
 
 ### 6.2 Aim
 
+Aim is built in layers. Each layer has exactly one writer, and nothing folds a lower layer back
+into a higher one:
+
+```
+ client, every frame             sim, every tick                        presentation, every frame
+ ───────────────────             ───────────────                        ─────────────────────────
+ look delta × sensitivity
+         │ summed
+         ▼
+ LocalAim (f32) ──quantize──▶ CharacterIntent.aim
+         │                             │
+         │                             ▼
+         │                ViewAngles = clamp(intent.aim + ViewAngleOffset)
+         │                             │
+         │                             ├─ + AimRecoil ──▶ AimRay (shots, traces, interaction)
+         │                             ▼
+         └──── pending = LocalAim − intent.aim ────▶ camera = ViewAngles + AimRecoil + pending
+                                                                    + ViewKick + shake + lean …
+```
+
+| Layer | Holds | Written by | Lifetime |
+|---|---|---|---|
+| `LocalAim` | The player's own accumulated look input, at full precision | `krit_input` only (client) | Permanent. Only look input changes it |
+| `CharacterIntent.aim` | `LocalAim` quantized, absolute | `krit_input`, bots, replays, the network layer | Absolute, so safe to repeat, drop or resend |
+| `ViewAngleOffset` | Facing that the *simulation* imposes: spawn and teleport facing, scripted looks, platform yaw | Simulation only | Permanent until the sim changes it again. It never holds input and never decays |
+| `ViewAngles` | The character's actual facing | `krit_movement`'s aim stage | Recomputed from scratch every tick; never accumulated |
+| `AimRecoil` | Weapon offsets that affect shots | Weapons add; the aim stage decays it | Temporary; decays to 0 |
+| `ViewKick`, shake, lean, bob | Visual-only offsets | `krit_kamera` | Temporary; never read by the sim |
+
+**Why input and offsets stay separate.** If recoil or effects were folded into `LocalAim`, they
+would become permanent the moment they reached an intent, and decaying them would mean subtracting
+them from player input again. Keeping input in `LocalAim` and every temporary offset in its own
+layer lets offsets decay toward 0 on their own while the player's aim stays exactly where they put
+it. Because the intent is absolute and the aim stage recomputes `ViewAngles` from scratch every tick,
+rollback and resimulation never accumulate anything.
+
+**Forced facing (Q3's `delta_angles`).** The simulation cannot write the client's `LocalAim`, so it
+writes the difference instead: to face the character toward `target`, it sets
+`ViewAngleOffset = target − intent.aim`. Later input keeps moving on from the new facing, and
+`krit_input` never rebases `LocalAim`. `ViewAngleOffset` is `OwnerPredicted` sim state, so the
+owning client has it for its pitch clamp and displayed aim.
+
+**Pitch clamp.** The aim stage clamps `ViewAngles.pitch` to `±PITCH_LIMIT`. `krit_input` clamps
+`LocalAim.pitch` against the same limit *in `ViewAngles` space*
+(`clamp(pitch + offset.pitch) − offset.pitch`). That way, pushing the mouse past the limit doesn't
+leave a dead zone the player has to move back through, and the client's view matches the sim's.
+
+**Yaw wrap.** `LocalAim.yaw` wraps so an `f32` doesn't lose precision after many turns. Every
+difference between angles (`pending`, `target − intent.aim`) uses the shortest signed angle.
+
+#### 6.2.1 Angle units: 2³² per turn, `u32` yaw and `i32` pitch
+
+`ViewAngles`, `CharacterIntent.aim` and `ViewAngleOffset` store each angle as a 32-bit **binary
+angle**: one full turn is 2³² units, so `1 << 30` is 90°. The unit is the same for both fields. Only
+the signedness differs, because only yaw goes round a circle:
+
+| Field | Type | Range | Arithmetic |
+|---|---|---|---|
+| `yaw` | `u32` | the whole turn; `0` is 0°, `1 << 31` is 180° | wraps: `wrapping_add`, `wrapping_sub` |
+| `pitch` | `i32` | `±PITCH_LIMIT`, just under ±90°; `0` is level | never wraps: `saturating_add`, then `clamp` |
+
+`LocalAim` stays `f32` radians, because it has to accumulate mouse motion finer than any stored unit.
+Its yaw wraps to [0, 2π) and its pitch is clamped. `AimRecoil` also stays `f32` radians. It is small,
+it decays, and it is only ever added at the float stage (`AimRay`, camera).
+
+```rust
+pub const TURN: f64 = 4_294_967_296.0;            // 2^32 units per full turn
+/// Just under 90°, so the aim never points straight up or down.
+pub const PITCH_LIMIT: i32 = ((FRAC_PI_2 - 0.01) / TAU * TURN) as i32;
+
+// Conversions go through f64: an f32 cannot fill 32 bits.
+fn yaw_to_units(rad: f32) -> u32 { ((rad as f64 / TAU).rem_euclid(1.0) * TURN) as u64 as u32 }
+fn pitch_to_units(rad: f32) -> i32 { (rad as f64 / TAU * TURN) as i64 as i32 }  // no rem_euclid
+fn yaw_to_radians(units: u32) -> f32 { (units as f64 / TURN * TAU) as f32 }
+fn pitch_to_radians(units: i32) -> f32 { (units as f64 / TURN * TAU) as f32 }
+fn yaw_delta(a: u32, b: u32) -> i32 { a.wrapping_sub(b) as i32 }   // shortest signed difference
+
+// Aim stage:
+// yaw   = intent.aim.yaw.wrapping_add(offset.yaw)
+// pitch = intent.aim.pitch.saturating_add(offset.pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT)
+```
+
+**Why an integer at all.** The intent is a simulation input. Client and server must step from
+bit-identical values (§8), and an integer is identical everywhere by construction. For yaw, integers
+also wrap for free: `wrapping_add` handles yaw passing 360°, and `wrapping_sub(..) as i32` gives the
+shortest signed difference, which the pending term, forced facing and bot aim all need.
+
+**Why pitch is `i32`, not `u32`.** Pitch is always clamped, so it never needs to wrap, and storing it
+as wrapping `u32` causes bugs:
+- a downward pitch would be stored as a value near 2³². Clamping that as unsigned sends it to the
+  top of the range, so looking slightly down snaps the aim to vertical;
+- `aim + offset` overflows when the offset is positive and the aim points down;
+- converting to radians gives [0, 2π), so differences that cross level are off by a full turn.
+
+Storing `i32` makes all of this plain signed arithmetic. `ViewAngleOffset.pitch` is a signed change,
+`saturating_add` cannot overflow, a plain `clamp(-PITCH_LIMIT, PITCH_LIMIT)` is correct, and `0`
+(and therefore `#[derive(Default)]`) means level. Do not convert pitch with `rem_euclid`. That is
+exactly what turns −0.05 rad into a value near 2³².
+
+**One shared limit.** `PITCH_LIMIT` lives in `krit_core::aim` and is used by `krit_input` (as
+radians, for `LocalAim`), by the aim stage, and by the camera's display clamp. If the limits differ,
+a forced pitch offset can push `ViewAngles` past what the camera shows, and shots leave the
+crosshair. Keeping the limit just under 90° also keeps `AimRay` from pointing straight up or down,
+where yaw would stop having any effect.
+
+**Why 32 bits, not Quake 3's 16.** The rounding error is at most half a unit:
+
+| | One unit | Worst-case error | At 100 m | 20× scope at 1080p (~3° vertical FOV) |
+|---|---|---|---|---|
+| `u16` (2¹⁶/turn) | 0.0055° | 0.0027° | ~5 mm | ~1 px |
+| 32-bit (2³²/turn) | 8.4×10⁻⁸° | 4.2×10⁻⁸° | ~0.07 µm | ~10⁻⁵ px |
+
+The camera draws `LocalAim` at full precision, but shots use the quantized `ViewAngles`, so any
+rounding error shows up as the crosshair disagreeing with the shot. With `u16`, that's under a pixel
+in normal play but around a pixel under extreme zoom, and very low sensitivity makes the simulated
+aim move in visible steps. 32 bits is finer than an `f32` angle can resolve (near π an `f32`
+resolves ~1.4×10⁻⁵°). That makes `LocalAim` itself the precision limit, so quantization adds no
+measurable error. The cost is 2 bytes per angle per command, about 0.8 KB/s of client upload at
+64 Hz with 3× redundancy. Q3 chose 16 bits for 1999 modem bandwidth. Source sends user-command
+angles as full floats.
+
+**Why not `f32` radians.** Sending an `f32` unchanged would also arrive bit-identical, so `f32`
+would work. But it gives up free wrapping: every add and subtract would need explicit wrap code,
+and an `f32` yaw near ±π has the coarsest precision of the whole range. A fixed binary angle has
+the same precision at every heading.
+
+**Where `u16` still fits.** `krit_net` may replicate *other* players' `ViewAngles` at 16 bits. Remote
+angles are only used to draw remote characters, and the server does hit detection against its own
+full-precision values. That compression belongs in the replication layer; the sim types stay 32-bit.
+
+**Converting back to floats.** `to_radians` and the trig in `AimRay` run in the simulation. The
+integer angle is exact, but `sin`/`cos` can differ between platforms. If clients and servers on
+different platforms must agree bit for bit, `AimRay` needs a deterministic math implementation
+(for example `libm`).
+
 | Boundary | Contract | Notes |
 |---|---|---|
-| intent → aim stage | `CharacterIntent.aim` | Absolute. The aim stage computes `ViewAngles = aim + ViewAngleOffset`, pitch clamped. |
-| sim → input | `ViewAngleOffset` | Server-forced facing. `krit_input` rebases `LocalAim` when it changes. |
+| input → intent | `LocalAim` → `CharacterIntent.aim` | In `FixedPreUpdate`, so `intent.aim` always equals the aim of the latest simulated tick. Quantizing only here lets sub-unit mouse motion accumulate instead of being dropped. |
+| intent → aim stage | `CharacterIntent.aim` | Absolute and pre-offset. The aim stage computes `ViewAngles = clamp(aim + ViewAngleOffset)`. |
+| sim → sim | `ViewAngleOffset` | Written only by the simulation (spawn, teleport, scripted look, movers). Read by the aim stage, and by `krit_input` for the pitch clamp only. |
 | movement → weapons, ballistics, interaction, kamera | `ViewAngles { yaw, pitch }`, `EyeHeight(f32)` | Simulation state on the Character. `AimRay::from(&Transform, &ViewAngles, &AimRecoil, &EyeHeight)` is the one shared helper. |
-| weapons → aim | `AimRecoil { pitch, yaw }` | Weapons *add*; the aim stage decays it. It is an additive offset that `AimRay` includes and is never folded into `ViewAngles`, because the next intent would overwrite it. Games that want recoil to move the player's view permanently fold it into `LocalAim` on the client. |
+| weapons → aim | `AimRecoil { pitch, yaw }` | Weapons *add*; the aim stage decays it. It is an additive offset that `AimRay` includes and is never folded into `ViewAngles`, because the next intent would overwrite it. Games that want recoil to move the view permanently add it to `ViewAngleOffset` in the simulation. That keeps it deterministic and out of player input. |
 | weapons → kamera | `WeaponFired` + `RecoilModel` read | The visual `ViewKick` channel. It is presentation only and kept separate from `AimRecoil` (CS "aim punch" vs "view punch"). |
+| input + sim → kamera | `LocalAim`, `CharacterIntent.aim`, `ViewAngles`, `AimRecoil` | Displayed aim; see §5.12. |
 
 ### 6.3 Weapons → ballistics → damage
 

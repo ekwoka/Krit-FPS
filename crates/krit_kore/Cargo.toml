@@ -1,0 +1,14 @@
+[package]
+name = "krit_kore"
+description = "Core structs, systemsets, etc"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_ecs.workspace = true
+bevy_math.workspace = true
+bevy_reflect.workspace = true
+
+bitflags.workspace = true

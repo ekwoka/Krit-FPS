@@ -13,3 +13,5 @@ bevy_math.workspace = true
 bevy_reflect.workspace = true
 
 bevy_enhanced_input.workspace = true
+
+krit_kore.workspace = true

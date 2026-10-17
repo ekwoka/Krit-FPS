@@ -2,7 +2,9 @@
 
 //! Handles all common logic for Inputs in an FPS game
 
-use bevy_app::{App, FixedPostUpdate, Plugin};
+use std::f32::consts::TAU;
+
+use bevy_app::{App, FixedPostUpdate, FixedPreUpdate, Plugin};
 use bevy_ecs::{
     component::Component, entity::MapEntities, observer::On, reflect::ReflectComponent,
     system::Query,
@@ -10,6 +12,10 @@ use bevy_ecs::{
 use bevy_enhanced_input::{action::events::Fire, prelude::InputAction};
 use bevy_math::{Vec2, Vec3};
 use bevy_reflect::Reflect;
+use krit_kore::{
+    aim::{LocalAim, PITCH_LIMIT, ViewAngleOffset, ViewAngles},
+    intent::CharacterIntent,
+};
 
 /// Enables KritInput core logic
 /// # Adding
@@ -44,7 +50,9 @@ impl Plugin for KritInputAccumulation {
         app.add_observer(apply_movement)
             .add_observer(apply_jump)
             .add_observer(apply_crouch)
-            .add_systems(FixedPostUpdate, clear_accumulated_input);
+            .add_observer(accumulate_look)
+            .add_systems(FixedPostUpdate, clear_accumulated_input)
+            .add_systems(FixedPreUpdate, update_intended_aim);
     }
 }
 
@@ -120,4 +128,44 @@ pub fn clear_accumulated_input(mut accumulated_inputs: Query<&mut AccumulatedInp
     for mut accumulated_input in &mut accumulated_inputs {
         *accumulated_input = AccumulatedInput::default();
     }
+}
+
+/// Accumulates Camera Rotation in LocalAim
+pub fn accumulate_look(
+    look: On<Fire<RotateCamera>>,
+    mut aim: Query<(&mut LocalAim, &ViewAngleOffset)>,
+) {
+    let delta = -look.value;
+    if let Ok((mut aim, offset)) = aim.get_mut(look.context) {
+        aim.yaw = (aim.yaw + delta.x.to_radians()).rem_euclid(TAU);
+        let limit = signed_to_radians(PITCH_LIMIT);
+        aim.pitch = (aim.pitch + delta.y.to_radians() + signed_to_radians(offset.pitch))
+            .clamp(-limit, limit)
+            - signed_to_radians(offset.pitch);
+    }
+}
+
+/// Moves LocalAim into CharacterIntent
+pub fn update_intended_aim(mut aim: Query<(&LocalAim, &mut CharacterIntent)>) {
+    for (local, mut intent) in aim.iter_mut() {
+        intent.aim = ViewAngles {
+            pitch: to_signed_units(local.pitch),
+            yaw: to_units(local.yaw),
+        };
+    }
+}
+
+/// One Full 360 Turn
+pub const FULL_TURN: f64 = 4_294_967_296.0;
+
+fn to_units(rad: f32) -> u32 {
+    ((rad as f64 / std::f64::consts::TAU).rem_euclid(1.0) * FULL_TURN) as u64 as u32
+}
+
+fn to_signed_units(rad: f32) -> i32 {
+    ((rad as f64 / std::f64::consts::TAU) * FULL_TURN) as i64 as i32
+}
+
+fn signed_to_radians(units: i32) -> f32 {
+    (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32
 }

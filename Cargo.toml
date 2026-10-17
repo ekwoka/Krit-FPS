@@ -2,6 +2,7 @@
 members = [
     "crates/krit_input",
     "crates/krit_kamera",
+    "crates/krit_kore",
     "examples/fps_view"
 ]
 
@@ -20,6 +21,7 @@ rust-version.workspace = true
 
 [dependencies]
 
+
 [workspace.dependencies]
 # Bevy Core
 bevy = { version = "0.20", default-features = false }
@@ -30,12 +32,14 @@ bevy_reflect = { version = "0.20", default-features = false }
 bevy_transform = { version = "0.20", default-features = false }
 
 # Third Party
-bevy_enhanced_input = { version = "0.27", default-features = false }
 avian3d = { git = "https://github.com/andriyDev/avian", branch = "bevy-0.20" }
+bevy_enhanced_input = { version = "0.27", default-features = false }
+bitflags = { version = "2.13", default-features = false }
 
 # local crates
 krit_input = { path = "crates/krit_input" }
 krit_kamera = { path = "crates/krit_kamera" }
+krit_kore = { path = "crates/krit_kore" }
 
 
 [workspace.metadata.bin]

@@ -18,3 +18,4 @@ bevy_enhanced_input.workspace = true
 
 krit_input.workspace = true
 krit_kamera.workspace = true
+krit_kore.workspace = true

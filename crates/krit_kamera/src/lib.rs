@@ -2,17 +2,17 @@
 
 //! Handles the Camera behaviors from input to rotation matching
 
-use std::f32::consts::TAU;
-
-use bevy_app::{App, Plugin};
+use bevy_app::{App, FixedPostUpdate, Plugin, Update};
 use bevy_ecs::{
-    component::Component, entity::Entity, lifecycle::HookContext, observer::On, query::With,
+    component::Component, entity::Entity, lifecycle::HookContext, query::With,
     relationship::Relationship, system::Query, template::FromTemplate, world::DeferredWorld,
 };
-use bevy_enhanced_input::action::events::Fire;
 use bevy_math::{EulerRot, Quat};
 use bevy_transform::components::Transform;
-use krit_input::RotateCamera;
+use krit_kore::{
+    aim::{LocalAim, PITCH_LIMIT, ViewAngleOffset, ViewAngles},
+    intent::CharacterIntent,
+};
 
 /// Enables KritKamera core logic
 /// # Adding
@@ -27,7 +27,8 @@ pub struct KritKamera;
 
 impl Plugin for KritKamera {
     fn build(&self, app: &mut App) {
-        app.add_observer(rotate_camera);
+        app.add_systems(FixedPostUpdate, update_view_angles)
+            .add_systems(Update, rotate_camera);
     }
 }
 
@@ -79,22 +80,42 @@ impl ControllerCamera {
 
 /// Handles rotating the camera in response to BEI actions firing
 pub fn rotate_camera(
-    rotation: On<Fire<RotateCamera>>,
-    cameras: Query<&ControllerCamera>,
+    cameras: Query<(&ControllerCamera, &LocalAim, &CharacterIntent, &ViewAngles)>,
     mut transforms: Query<&mut Transform, With<ControllerCameraOf>>,
 ) {
-    let Ok(mut camera_transform) = cameras
-        .get(rotation.context)
-        .and_then(|camera| transforms.get_mut(camera.get()))
-    else {
-        return;
-    };
+    for (camera, local, intent, angles) in cameras.iter() {
+        if let Ok(mut camera_transform) = transforms.get_mut(camera.get()) {
+            let mut pitch = signed_to_radians(angles.pitch)
+                + (local.pitch - signed_to_radians(intent.aim.pitch));
+            let yaw = to_radians(angles.yaw) + (local.yaw - to_radians(intent.aim.yaw));
 
-    let (mut yaw, mut pitch, _) = camera_transform.rotation.to_euler(EulerRot::YXZ);
-    let delta = -rotation.value;
-    yaw += delta.x.to_radians();
-    pitch += delta.y.to_radians();
-    pitch = pitch.clamp(-TAU / 4.0 + 0.01, TAU / 4.0 - 0.01);
+            let limit = signed_to_radians(PITCH_LIMIT);
+            pitch = pitch.clamp(-limit, limit);
 
-    camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        }
+    }
+}
+
+/// Updates ViewAngles from CharacterIntent and ViewAngleOffset
+pub fn update_view_angles(mut views: Query<(&mut ViewAngles, &CharacterIntent, &ViewAngleOffset)>) {
+    for (mut angles, intent, offset) in views.iter_mut() {
+        angles.pitch = intent
+            .aim
+            .pitch
+            .saturating_add(offset.pitch)
+            .clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        angles.yaw = intent.aim.yaw.wrapping_add(offset.yaw);
+    }
+}
+
+/// One Full 360 Turn
+pub const FULL_TURN: f64 = 4_294_967_296.0;
+
+fn to_radians(units: u32) -> f32 {
+    (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32
+}
+
+fn signed_to_radians(units: i32) -> f32 {
+    (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32
 }

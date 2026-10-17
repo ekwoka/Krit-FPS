@@ -2,14 +2,17 @@ use bevy::{light::CascadeShadowConfigBuilder, prelude::*};
 use bevy_enhanced_input::prelude::*;
 use krit_input::{KritInput, RotateCamera};
 use krit_kamera::{ControllerCamera, KritKamera};
+use krit_kore::{
+    aim::{LocalAim, ViewAngleOffset, ViewAngles},
+    intent::CharacterIntent,
+};
 
-fn main() -> () {
+fn main() {
     App::new()
         .add_plugins((DefaultPlugins, KritInput, KritKamera, EnhancedInputPlugin))
         .add_input_context::<Player>()
         .add_systems(Startup, spawn_world)
         .run();
-    ()
 }
 
 fn spawn_world(
@@ -59,6 +62,10 @@ fn spawn_world(
         // Character
         #Player
         Player
+        LocalAim
+        ViewAngles
+        CharacterIntent
+        ViewAngleOffset
         @player_context()
         Transform::from_xyz(0.0, 0.0, 0.0)
         ControllerCamera[
