@@ -135,7 +135,7 @@ pub fn accumulate_look(
     look: On<Fire<RotateCamera>>,
     mut aim: Query<(&mut LocalAim, &ViewAngleOffset)>,
 ) {
-    let delta = -look.value;
+    let delta = look.value * -0.5;
     if let Ok((mut aim, offset)) = aim.get_mut(look.context) {
         aim.yaw = (aim.yaw + delta.x.to_radians()).rem_euclid(TAU);
         let limit = signed_to_radians(PITCH_LIMIT);

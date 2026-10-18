@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/krit_avian",
     "crates/krit_input",
     "crates/krit_kamera",
     "crates/krit_kore",
@@ -9,6 +10,7 @@ members = [
 [workspace.package]
 authors = ["Eric Kwoka <43540491+ekwoka@users.noreply.github.com>"]
 edition = "2024"
+version = "0.0.1"
 rust-version = "1.99"
 
 [package]

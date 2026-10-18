@@ -1,7 +1,7 @@
 [package]
 name = "krit_kamera"
 description = "Camera handler for Krit FPS games"
-version = "0.1.0"
+version.workspace = true
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true

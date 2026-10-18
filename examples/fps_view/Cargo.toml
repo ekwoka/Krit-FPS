@@ -1,7 +1,7 @@
 [package]
 name = "fps_view"
 description = "Simple FPS View and Controller"
-version = "0.0.1"
+version.workspace = true
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true

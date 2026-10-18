@@ -1,0 +1,15 @@
+[package]
+name = "krit_avian"
+description = "Boundary Code for integrating the Avian Backend"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+
+avian3d.workspace = true
+
+krit_kore.workspace = true

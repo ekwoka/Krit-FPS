@@ -1,7 +1,7 @@
 [package]
 name = "krit_input"
 description = "Common Input Types for FPS games"
-version = "0.0.1"
+version.workspace = true
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
