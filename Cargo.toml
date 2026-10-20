@@ -34,11 +34,12 @@ bevy_reflect = { version = "0.20", default-features = false }
 bevy_transform = { version = "0.20", default-features = false }
 
 # Third Party
-avian3d = { git = "https://github.com/avianphysics/avian" }
+avian3d = { version = "0.8" }
 bevy_enhanced_input = { version = "0.27", default-features = false }
 bitflags = { version = "2.13", default-features = false }
 
 # local crates
+krit_avian = { path = "crates/krit_avian" }
 krit_input = { path = "crates/krit_input" }
 krit_kamera = { path = "crates/krit_kamera" }
 krit_kore = { path = "crates/krit_kore" }
