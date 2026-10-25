@@ -1,0 +1,14 @@
+[package]
+name = "krit_movement"
+description = "Character Controller"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bevy_math.workspace = true
+
+krit_kore.workspace = true

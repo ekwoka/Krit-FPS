@@ -4,6 +4,7 @@ members = [
     "crates/krit_input",
     "crates/krit_kamera",
     "crates/krit_kore",
+    "crates/krit_movement",
     "examples/fps_view"
 ]
 
@@ -43,6 +44,7 @@ krit_avian = { path = "crates/krit_avian" }
 krit_input = { path = "crates/krit_input" }
 krit_kamera = { path = "crates/krit_kamera" }
 krit_kore = { path = "crates/krit_kore" }
+krit_movement = { path = "crates/krit_movement" }
 
 
 [workspace.metadata.bin]

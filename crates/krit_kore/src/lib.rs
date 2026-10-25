@@ -26,8 +26,8 @@ impl Plugin for KritKore {
             (
                 KritSimSystems::Intent,
                 KritSimSystems::Spawn,
-                KritSimSystems::Aim,
                 KritSimSystems::Movers,
+                KritSimSystems::Aim,
                 KritSimSystems::Movement,
             )
                 .chain()
