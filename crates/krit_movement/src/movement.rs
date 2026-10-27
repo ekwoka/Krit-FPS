@@ -2,9 +2,13 @@ use bevy_app::{App, FixedPostUpdate, Plugin};
 use bevy_ecs::{
     component::Component,
     schedule::{IntoScheduleConfigs, SystemSet},
+    system::Query,
 };
 
-use krit_kore::sets::KritSimSystems;
+use bevy_math::Vec3Swizzles;
+use bevy_transform::components::Transform;
+use krit_kore::{intent::CharacterIntent, sets::KritSimSystems};
+use tracing::info;
 
 /// Plugin that handles the Movement Cycle
 pub struct KritMovementPlugin;
@@ -43,15 +47,35 @@ pub enum MovementSystems {
 }
 
 #[derive(Default, Clone, Debug)]
-pub struct StepContext {}
+pub struct StepContext {
+    intent: CharacterIntent,
+    transform: Transform,
+}
 
 #[derive(Default, Clone, Debug)]
-pub struct StepReport {}
+pub struct StepReport {
+    transform: Transform,
+}
 
-pub fn handle_movement() {}
+pub fn handle_movement(mut ctx: Query<(&CharacterController, &mut Transform, &CharacterIntent)>) {
+    for (controller, mut transform, intent) in ctx.iter_mut() {
+        info!("stepping Movement");
+        let report = step(&StepContext {
+            intent: intent.clone(),
+            transform: transform.clone(),
+        });
+        info!("Updating Movement: {:?}", report.transform.translation);
+        transform.translation = report.transform.translation.clone();
+    }
+}
 
 pub fn step(ctx: &StepContext) -> StepReport {
-    StepReport {}
+    let mut position = ctx.transform.translation;
+    position += ctx.intent.move_axis.extend(0.0).xzy();
+
+    StepReport {
+        transform: Transform::from_translation(position),
+    }
 }
 
 #[derive(Component, Default, Clone)]

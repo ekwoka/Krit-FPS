@@ -7,7 +7,7 @@ use std::f32::consts::TAU;
 use bevy_app::{App, FixedPostUpdate, FixedPreUpdate, Plugin};
 use bevy_ecs::{
     component::Component, entity::MapEntities, observer::On, reflect::ReflectComponent,
-    system::Query,
+    schedule::IntoScheduleConfigs, system::Query,
 };
 use bevy_enhanced_input::{action::events::Fire, prelude::InputAction};
 use bevy_math::{Vec2, Vec3};
@@ -15,7 +15,9 @@ use bevy_reflect::Reflect;
 use krit_kore::{
     aim::{LocalAim, PITCH_LIMIT, ViewAngleOffset, ViewAngles},
     intent::CharacterIntent,
+    sets::KritSimPhase,
 };
+use tracing::info;
 
 /// Enables KritInput core logic
 /// # Adding
@@ -51,7 +53,12 @@ impl Plugin for KritInputAccumulation {
             .add_observer(apply_jump)
             .add_observer(apply_crouch)
             .add_observer(accumulate_look)
-            .add_systems(FixedPostUpdate, clear_accumulated_input)
+            .add_systems(
+                FixedPostUpdate,
+                (clear_accumulated_input, clear_movement_intent)
+                    .chain()
+                    .in_set(KritSimPhase::PostPhysics),
+            )
             .add_systems(FixedPreUpdate, update_intended_aim);
     }
 }
@@ -99,10 +106,11 @@ pub struct AccumulatedInput {
 /// The last movement event is used.
 pub fn apply_movement(
     movement: On<Fire<Movement>>,
-    mut accumulated_inputs: Query<&mut AccumulatedInput>,
+    mut accumulated_inputs: Query<&mut CharacterIntent>,
 ) {
     if let Ok(mut accumulated_inputs) = accumulated_inputs.get_mut(movement.context) {
-        accumulated_inputs.last_movement = Some(movement.value);
+        info!("Moving: {:?}", movement.value);
+        accumulated_inputs.move_axis = movement.value;
     }
 }
 
@@ -127,6 +135,13 @@ pub fn apply_crouch(
 pub fn clear_accumulated_input(mut accumulated_inputs: Query<&mut AccumulatedInput>) {
     for mut accumulated_input in &mut accumulated_inputs {
         *accumulated_input = AccumulatedInput::default();
+    }
+}
+
+/// Clears Accumulated Inputs after they are processed
+pub fn clear_movement_intent(mut accumulated_inputs: Query<&mut CharacterIntent>) {
+    for mut accumulated_input in &mut accumulated_inputs {
+        accumulated_input.move_axis = Vec2::ZERO;
     }
 }
 

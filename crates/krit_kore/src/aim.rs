@@ -9,7 +9,7 @@ pub const PITCH_LIMIT: i32 =
     ((std::f64::consts::FRAC_PI_2 - 0.01) / std::f64::consts::TAU * 4_294_967_296.0) as i32;
 
 /// Represents Intended View Angle
-#[derive(Component, Clone, Default, Reflect, PartialEq)]
+#[derive(Component, Clone, Default, Reflect, PartialEq, Debug)]
 pub struct ViewAngles {
     /// View Yaw
     pub yaw: u32,

@@ -1,15 +1,22 @@
 use bevy::{light::CascadeShadowConfigBuilder, prelude::*};
-use bevy_enhanced_input::prelude::*;
-use krit_input::{KritInput, RotateCamera};
+use bevy_enhanced_input::{prelude::*, preset::cardinal::wasd_keys};
+use krit_input::{KritInput, Movement, RotateCamera};
 use krit_kamera::{ControllerCamera, KritKamera};
 use krit_kore::{
     aim::{LocalAim, ViewAngleOffset, ViewAngles},
     intent::CharacterIntent,
 };
+use krit_movement::{KritMovement, movement::CharacterController};
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, KritInput, KritKamera, EnhancedInputPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            KritInput,
+            KritKamera,
+            KritMovement,
+            EnhancedInputPlugin,
+        ))
         .add_input_context::<Player>()
         .add_systems(Startup, spawn_world)
         .run();
@@ -58,6 +65,14 @@ fn spawn_world(
         MeshMaterial3d<StandardMaterial>(rubble)
         Transform::from_xyz(0.0, -2.0, 0.0)
     });
+    let boxy = meshes.add(Cuboid::new(10.0, 10.0, 10.0));
+    let blue = materials.add(solid(Color::srgb_u8(20, 20, 200)));
+    commands.spawn_scene(bsn! {
+        // Ground
+        Mesh3d(boxy)
+        MeshMaterial3d<StandardMaterial>(blue)
+        Transform::from_xyz(0.0, 0.0, -30.0)
+    });
     commands.spawn_scene(bsn! {
         // Character
         #Player
@@ -65,6 +80,7 @@ fn spawn_world(
         LocalAim
         ViewAngles
         CharacterIntent
+        CharacterController
         ViewAngleOffset
         @player_context()
         Transform::from_xyz(0.0, 0.0, 0.0)
@@ -83,6 +99,11 @@ fn player_context() -> impl Scene {
             Action::<RotateCamera>::new()
             Bindings [
                 Binding::mouse_motion()
+            ]
+            --
+            Action::<Movement>::new()
+            Bindings [
+                {wasd_keys()}
             ]
         ]
     }

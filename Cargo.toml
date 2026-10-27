@@ -33,6 +33,7 @@ bevy_ecs = { version = "0.20", default-features = false }
 bevy_math = { version = "0.20", default-features = false }
 bevy_reflect = { version = "0.20", default-features = false }
 bevy_transform = { version = "0.20", default-features = false }
+tracing = { version = "0.1.44", default-features = false }
 
 # Third Party
 avian3d = { version = "0.8" }

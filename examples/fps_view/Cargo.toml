@@ -13,9 +13,11 @@ bevy = { workspace = true, default-features = true, features = [
     "x11",
     "bevy_feathers"
 ] }
+tracing.workspace = true
 
 bevy_enhanced_input.workspace = true
 
 krit_input.workspace = true
 krit_kamera.workspace = true
+krit_movement.workspace = true
 krit_kore.workspace = true

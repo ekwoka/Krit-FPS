@@ -11,6 +11,7 @@ bevy_app.workspace = true
 bevy_ecs.workspace = true
 bevy_math.workspace = true
 bevy_reflect.workspace = true
+tracing.workspace = true
 
 bevy_enhanced_input.workspace = true
 

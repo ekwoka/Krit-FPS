@@ -6,7 +6,7 @@ use crate::aim::ViewAngles;
 
 /// Represents the Intent of the Character
 /// Can be written by Player input, Bots, Replays, etc
-#[derive(Component, Clone, Default, Reflect, PartialEq)]
+#[derive(Component, Clone, Default, Reflect, PartialEq, Debug)]
 pub struct CharacterIntent {
     /// Local Space Movement Intent
     pub move_axis: Vec2,

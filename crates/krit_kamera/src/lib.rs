@@ -4,8 +4,14 @@
 
 use bevy_app::{App, FixedPostUpdate, Plugin, Update};
 use bevy_ecs::{
-    component::Component, entity::Entity, lifecycle::HookContext, query::With,
-    relationship::Relationship, system::Query, template::FromTemplate, world::DeferredWorld,
+    component::Component,
+    entity::Entity,
+    lifecycle::HookContext,
+    query::{With, Without},
+    relationship::Relationship,
+    system::Query,
+    template::FromTemplate,
+    world::DeferredWorld,
 };
 use bevy_math::{EulerRot, Quat};
 use bevy_transform::components::Transform;
@@ -28,7 +34,7 @@ pub struct KritKamera;
 impl Plugin for KritKamera {
     fn build(&self, app: &mut App) {
         app.add_systems(FixedPostUpdate, update_view_angles)
-            .add_systems(Update, rotate_camera);
+            .add_systems(Update, (rotate_camera, move_camera));
     }
 }
 
@@ -93,6 +99,17 @@ pub fn rotate_camera(
             pitch = pitch.clamp(-limit, limit);
 
             camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        }
+    }
+}
+
+pub fn move_camera(
+    cameras: Query<(&ControllerCamera, &Transform), Without<ControllerCameraOf>>,
+    mut transforms: Query<&mut Transform, With<ControllerCameraOf>>,
+) {
+    for (camera, transform) in cameras.iter() {
+        if let Ok(mut camera_transform) = transforms.get_mut(camera.get()) {
+            camera_transform.translation = transform.translation.clone();
         }
     }
 }
