@@ -169,10 +169,11 @@ pub enum KritSimSystems {
     Intent,
     /// Spawn requests from last tick's Rules are realised here, at the start of the tick
     Spawn,
+    /// Moving platforms, doors and other kinematic movers (before characters ride them,
+    /// and before Aim so platform yaw reaches ViewAngles on the same tick)
+    Movers,
     /// ViewAngles from the intent's absolute aim + `ViewAngleOffset`; recoil recovery
     Aim,
-    /// Moving platforms, doors and other kinematic movers (before characters ride them)
-    Movers,
     /// Character movement (KCC)
     Movement,
     // ---- PostPhysics ----

@@ -11,7 +11,7 @@
 - additive effect layers:
   - `HeadBob`, with an accessibility toggle;
   - `LandingDip`;
-  - `StepSmoothing`, from `KinematicState.last_step_height` (Q3 `CG_StepOffset`);
+  - `StepSmoothing`, from `Locomotion.last_step_height` (Q3 `CG_StepOffset`);
   - `CameraShake { trauma }`;
   - `ViewKick`, the *visual* recoil spring, separate from `AimRecoil`;
   - `LeanRoll`;
@@ -32,7 +32,7 @@ in `CameraEffects`. Mouse look therefore updates every frame, while shots still 
 - The camera never writes back into `LocalAim`, `ViewAngles` or `AimRecoil` (§6.2).
 
 **Consumes:** `ViewAngles`, `AimRecoil`, `LocalAim`, `CharacterIntent.aim`, `EyeHeight` and the character `Transform`
-(interpolated); `MovementState`, `KinematicState`, `Landed`, `WeaponFired`, `AdsState`,
+(interpolated); `MovementState`, `Stance`, `Locomotion`, `Landed`, `WeaponFired`, `AdsState`,
 `LastDamageTaken` and `LifeState`.
 
 **Produces:** only the camera `Transform` and `Projection` FOV. Nothing in simulation reads them.

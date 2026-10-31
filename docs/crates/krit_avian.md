@@ -7,7 +7,10 @@
 - the implementation of `SpatialQueryBackend` on a `SystemParam`, wrapping `SpatialQuery`;
 - the `CollisionQuery` primitives (`cast_shape`, `depenetrate`, `intersections`, `contents`,
   `surface`) that `krit_movement`'s algorithm calls. It does **not** own the slide algorithm (P9);
-- writing movement output to avian `Position` / `LinearVelocity`;
+- writing movement output to avian `Position` / `LinearVelocity`. Characters are
+  `RigidBody::Kinematic` (no forces, gravity or contact response; the velocity only pushes dynamic
+  bodies) and also get `CustomPositionIntegration`, so avian does not move them a second time from
+  that velocity;
 - mapping `KritLayer` to avian `CollisionLayers`;
 - `register_required_components_with` (Character → `RigidBody::Kinematic` + `Collider` from the
   controller's hull shape, `Hurtbox` → `Sensor` collider);
