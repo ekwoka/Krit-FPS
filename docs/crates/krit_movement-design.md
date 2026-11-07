@@ -50,7 +50,7 @@ lives, and whether rollback has to restore it.
 | **Configuration** | *What is this character?* | Set at spawn; changes rarely | Replicated, not predicted | `CharacterController`, `CharacterHull`, `MovementProfile`, `MovementStats` |
 | **Command** | *What does it want this tick?* | One tick | No, rebuilt from the intent | `MoveCommand` |
 | **Surroundings** | *What is around it right now?* | One tick | No, re-measured from the world | `Surroundings`, `BodyPose` |
-| **Motion state** | *What is it doing?* | Carried tick to tick | **Yes**: this is the whole rollback state | body position (backend), `KinematicState`, `MovementState`, `Stance`, `Stamina` |
+| **Motion state** | *What is it doing?* | Carried tick to tick | **Yes**: this is the whole rollback state | body position (backend), `KinematicState`, `MovementState`, `Stance`, `Stamina`, and the aim state `ViewAngles`, `ViewAngleOffset`, `AimRecoil` (in `core`; written by the aim stage and weapons, §7) |
 | **Results** | *What happened, and what should others see?* | One tick | No, recomputed | `StepEvents`, `Locomotion`, `EyeHeight`, `MovementSpreadFactor`, facts |
 
 The rule that keeps this design small: **only motion state carries information from one tick to the
@@ -404,7 +404,8 @@ pub struct Motion<'a> {
 `Tuning` and `Motion` are only borrow bundles: they keep the signature stable as later parts add
 state, and they make "what is rolled back" visible in the type.
 
-**Part 1 order.** If `sensed.stuck`, skip to step 6. Otherwise:
+**Part 1 order.** If `sensed.stuck`, skip to the end of the step — keep the velocity and leave the
+position unchanged (per §1.6); this is the same skip §4.3 lands at "end of tick". Otherwise:
 
 1. **Friction** (§1.7.2), if grounded.
 2. **Accelerate** (§1.7.3) toward `wish_dir × wish_amount × walk_speed`, with ground or air
@@ -551,8 +552,8 @@ lineage presets).
 - `EyeHeight = standing_height − eye_below_top` (Part 3 makes it follow stance);
 - `MovementSpreadFactor`;
 - `KinematicContacts` from `events.contacts`;
-- facts: `Landed { fall_speed }` from `events.landed`, and `MovementStateChanged` if the final mode
-  differs from `events.start_mode`.
+- facts: `Landed` (fall speed from `events.landed`, surface from `Surroundings.ground`; full shape in
+  §9.2), and `MovementStateChanged` if the final mode differs from `events.start_mode`.
 
 That completes Part 1: the character walks, climbs steps, slides along walls, stays glued to stairs
 and falls off ledges.
@@ -588,10 +589,11 @@ frame-time stopwatches are the counter-example ([`research/bevy-ecosystem.md`](.
 
 The jump check is inserted **at the very start of the step, before friction**:
 
-0. **Jump check** (§2.3). On a jump: set the vertical velocity, treat the character as airborne for
-   the rest of the tick, and mark it as a jump tick.
-1. **Friction**, only if grounded, and skipped on a jump tick when `skip_friction_on_jump_tick` is
-   set.
+0. **Jump check** (§2.3). On a jump: set the vertical velocity and mark it as a jump tick. The move,
+   re-probe and settle that follow treat the character as airborne.
+1. **Friction**, only if the character was grounded *at the start of the tick* (from `Sense`), and
+   skipped on a jump tick when `skip_friction_on_jump_tick` is set. The flag is what stops it: tick-start
+   grounding alone would still run friction on the jump tick.
 2. … the rest of Part 1, except that step 4 does not `snap_down` on a jump tick, and the
    re-probe in step 5 never reports ground on a jump tick.
 
@@ -1162,7 +1164,7 @@ pub fn accelerate(v, wish_dir, wishspeed, accel, cap: Option<f32>, model, dt) ->
 pub fn slide(world, hull, pose: &mut Vec3, v: &mut Vec3, dt, planes: &[Dir3], cfg) -> SlideResult;
 pub fn step_up(world, hull, pose: &mut Vec3, v: &mut Vec3, dt, cfg) -> StepResult;
 pub fn snap_down(world, hull, pose: &mut Vec3, cfg) -> Option<f32>;
-pub fn wish(move_axis: Vec2, yaw: u32) -> (Vec3, f32);   // (wish_dir, wish_amount), §1.7.1
+pub fn wish(move_axis: Vec2, yaw: u32) -> (Vec3, f32);   // (wish_dir, wish_amount); yaw is the raw u32, converted to radians inside (§1.7.1)
 ```
 
 A game writing its own controller (a hover vehicle, a wall-runner) calls these and gets the same

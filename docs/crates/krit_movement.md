@@ -36,7 +36,7 @@ step) → Apply (write the backend body) → Report (read models and facts). Des
 
 **The step order is part of the contract**, so replacement crates can match it (design §4.3):
 
-> stance → jump check → friction (skipped on the jump tick if the profile says so) → accelerate →
+> stance → jump check → friction (skipped on a jump tick if the profile says so, or while friction-locked) → accelerate →
 > first half of gravity → slide/step/snap → re-probe ground → second half of gravity → settle
 > `Ground`/`Air` and detect landing → timers.
 
@@ -73,8 +73,8 @@ The API has three extension tiers, following the Unity Character Controller pack
 - `Locomotion` (core read model: velocity, grounded, sprinting, water level, step height,
   footsteps), `EyeHeight` and `MovementSpreadFactor` (0..1, read by weapons);
 - `ActionGates` contributions (no ADS while sprinting or on a ladder);
-- `Jumped`, `Landed { fall_speed }`, `MovementStateChanged` and `StanceChanged` facts;
-- `CharacterPush { other, impulse }` for dynamic bodies the character walks into;
+- `Jumped`, `Landed`, `MovementStateChanged` and `StanceChanged` facts;
+- `CharacterPush` for dynamic bodies the character walks into;
 - `NoiseEvent` for footsteps, jumps and landings;
 - a `DamageRequest` for fall damage (type `Fall`).
 

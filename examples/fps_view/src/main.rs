@@ -1,3 +1,4 @@
+use avian3d::{PhysicsPlugins, collision::collider::Collider, dynamics::rigid_body::RigidBody};
 use bevy::{light::CascadeShadowConfigBuilder, prelude::*};
 use bevy_enhanced_input::{prelude::*, preset::cardinal::wasd_keys};
 use krit_input::{KritInput, Movement, RotateCamera};
@@ -12,6 +13,7 @@ fn main() {
     App::new()
         .add_plugins((
             DefaultPlugins,
+            PhysicsPlugins::default(),
             KritInput,
             KritKamera,
             KritMovement,
@@ -64,14 +66,18 @@ fn spawn_world(
         Mesh3d(ground)
         MeshMaterial3d<StandardMaterial>(rubble)
         Transform::from_xyz(0.0, -2.0, 0.0)
+        RigidBody::Static
+            Collider::cuboid(500.0, 2.0, 500.0)
     });
     let boxy = meshes.add(Cuboid::new(10.0, 10.0, 10.0));
     let blue = materials.add(solid(Color::srgb_u8(20, 20, 200)));
     commands.spawn_scene(bsn! {
-        // Ground
+        // Box
         Mesh3d(boxy)
         MeshMaterial3d<StandardMaterial>(blue)
         Transform::from_xyz(0.0, 0.0, -30.0)
+        RigidBody::Static
+        Collider::cuboid(10.0, 10.0, 10.0)
     });
     commands.spawn_scene(bsn! {
         // Character
@@ -81,12 +87,14 @@ fn spawn_world(
         ViewAngles
         CharacterIntent
         CharacterController
+        RigidBody::Kinematic
         ViewAngleOffset
         @player_context()
         Transform::from_xyz(0.0, 0.0, 0.0)
         ControllerCamera[
             Camera3d
         ]
+        Collider::capsule(1.0, 2.0)
     });
 }
 

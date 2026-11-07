@@ -32,8 +32,9 @@ bevy_app = { version = "0.20", default-features = false }
 bevy_ecs = { version = "0.20", default-features = false }
 bevy_math = { version = "0.20", default-features = false }
 bevy_reflect = { version = "0.20", default-features = false }
+bevy_time = { version = "0.20", default-features = false }
 bevy_transform = { version = "0.20", default-features = false }
-tracing = { version = "0.1.44", default-features = false }
+tracing = { version = "0.1", default-features = false }
 
 # Third Party
 avian3d = { version = "0.8" }
@@ -50,7 +51,7 @@ krit_movement = { path = "crates/krit_movement" }
 
 [workspace.metadata.bin]
 cargo-make = { version = "0.37.24", locked = false }
-cargo-nextest = { version = "0.9.146", locked = true }
+cargo-nextest = { version = "0.9.151", locked = true }
 cargo-watch = { version = "8.5.3", locked = true }
 
 [profile.dev]

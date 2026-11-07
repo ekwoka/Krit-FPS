@@ -29,12 +29,4 @@ impl Plugin for KritMovement {
 }
 
 #[derive(Component, Default, Clone)]
-pub struct KinematicState {
-    pub velocity: Vec3,
-    pub grounded: bool,
-    pub ground_normal: Vec2,
-    pub last_step_height: f32,
-}
-
-#[derive(Component, Default, Clone)]
 pub struct Stamina(f32);

@@ -10,7 +10,10 @@ rust-version.workspace = true
 bevy_app.workspace = true
 bevy_ecs.workspace = true
 bevy_math.workspace = true
+bevy_time.workspace = true
 bevy_transform.workspace = true
 tracing.workspace = true
+
+avian3d.workspace = true
 
 krit_kore.workspace = true
