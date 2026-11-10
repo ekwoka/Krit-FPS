@@ -13,7 +13,7 @@ use bevy_enhanced_input::{action::events::Fire, prelude::InputAction};
 use bevy_math::{Vec2, Vec3};
 use bevy_reflect::Reflect;
 use krit_kore::{
-    aim::{LocalAim, PITCH_LIMIT, ViewAngleOffset, ViewAngles},
+    aim::{LocalAim, PITCH_LIMIT, ViewAngleOffset},
     intent::CharacterIntent,
     sets::KritSimPhase,
 };
@@ -163,23 +163,12 @@ pub fn accumulate_look(
 /// Moves LocalAim into CharacterIntent
 pub fn update_intended_aim(mut aim: Query<(&LocalAim, &mut CharacterIntent)>) {
     for (local, mut intent) in aim.iter_mut() {
-        intent.aim = ViewAngles {
-            pitch: to_signed_units(local.pitch),
-            yaw: to_units(local.yaw),
-        };
+        intent.aim = local.into();
     }
 }
 
 /// One Full 360 Turn
 pub const FULL_TURN: f64 = 4_294_967_296.0;
-
-fn to_units(rad: f32) -> u32 {
-    ((rad as f64 / std::f64::consts::TAU).rem_euclid(1.0) * FULL_TURN) as u64 as u32
-}
-
-fn to_signed_units(rad: f32) -> i32 {
-    ((rad as f64 / std::f64::consts::TAU) * FULL_TURN) as i64 as i32
-}
 
 fn signed_to_radians(units: i32) -> f32 {
     (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32

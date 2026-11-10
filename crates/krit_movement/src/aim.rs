@@ -20,7 +20,10 @@ impl Plugin for KritAimPlugin {
 /// SystemSet for Aiming
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AimSystems {
+    /// Updates Character Aim based on ground
     Ride,
+    /// Composes Aim
     Compose,
+    /// Handles Recoil
     Recoil,
 }

@@ -4,11 +4,12 @@
 
 use bevy_app::{App, Plugin};
 use bevy_ecs::component::Component;
-use bevy_math::{Vec2, Vec3};
 
 use crate::{aim::KritAimPlugin, movement::KritMovementPlugin};
 
+/// Handles Character Aim Direction
 pub mod aim;
+/// Handles Character Motion
 pub mod movement;
 
 /// Enables KritMovement core logic
@@ -28,5 +29,6 @@ impl Plugin for KritMovement {
     }
 }
 
+/// Character Stamina
 #[derive(Component, Default, Clone)]
 pub struct Stamina(f32);

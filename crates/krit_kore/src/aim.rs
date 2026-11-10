@@ -26,6 +26,26 @@ pub struct LocalAim {
     pub pitch: f32,
 }
 
+impl From<&LocalAim> for ViewAngles {
+    fn from(local: &LocalAim) -> ViewAngles {
+        ViewAngles {
+            pitch: to_signed_units(local.pitch),
+            yaw: to_units(local.yaw),
+        }
+    }
+}
+
+impl ViewAngles {
+    /// Returns the internal Pitch as Radians
+    pub fn pitch_rads(&self) -> f32 {
+        signed_to_radians(self.pitch)
+    }
+    /// Returns the internal Yaw as Radians
+    pub fn yaw_rads(&self) -> f32 {
+        units_to_radians(self.yaw)
+    }
+}
+
 /// Game injected change to ViewAngle
 #[derive(Component, Clone, Default)]
 pub struct ViewAngleOffset {
@@ -33,4 +53,23 @@ pub struct ViewAngleOffset {
     pub yaw: u32,
     /// Local Pitch
     pub pitch: i32,
+}
+
+/// One Full 360 Turn
+pub const FULL_TURN: f64 = 4_294_967_296.0;
+
+fn to_units(rad: f32) -> u32 {
+    ((rad as f64 / std::f64::consts::TAU).rem_euclid(1.0) * FULL_TURN) as u32
+}
+
+fn units_to_radians(units: u32) -> f32 {
+    (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32
+}
+
+fn to_signed_units(rad: f32) -> i32 {
+    ((rad as f64 / std::f64::consts::TAU) * FULL_TURN) as i64 as i32
+}
+
+fn signed_to_radians(units: i32) -> f32 {
+    (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32
 }

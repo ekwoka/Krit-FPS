@@ -91,9 +91,8 @@ pub fn rotate_camera(
 ) {
     for (camera, local, intent, angles) in cameras.iter() {
         if let Ok(mut camera_transform) = transforms.get_mut(camera.get()) {
-            let mut pitch = signed_to_radians(angles.pitch)
-                + (local.pitch - signed_to_radians(intent.aim.pitch));
-            let yaw = to_radians(angles.yaw) + (local.yaw - to_radians(intent.aim.yaw));
+            let mut pitch = angles.pitch_rads() + (local.pitch - intent.aim.pitch_rads());
+            let yaw = angles.yaw_rads() + (local.yaw - intent.aim.yaw_rads());
 
             let limit = signed_to_radians(PITCH_LIMIT);
             pitch = pitch.clamp(-limit, limit);
@@ -103,6 +102,7 @@ pub fn rotate_camera(
     }
 }
 
+/// Updates the Cameras Transform to match the Characters Transform
 pub fn move_camera(
     cameras: Query<(&ControllerCamera, &Transform), Without<ControllerCameraOf>>,
     mut transforms: Query<&mut Transform, With<ControllerCameraOf>>,
@@ -128,10 +128,6 @@ pub fn update_view_angles(mut views: Query<(&mut ViewAngles, &CharacterIntent, &
 
 /// One Full 360 Turn
 pub const FULL_TURN: f64 = 4_294_967_296.0;
-
-fn to_radians(units: u32) -> f32 {
-    (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32
-}
 
 fn signed_to_radians(units: i32) -> f32 {
     (units as f64 / FULL_TURN * std::f64::consts::TAU) as f32

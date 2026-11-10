@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use avian3d::{
     character_controller::move_and_slide::{
-        self, DepenetrationConfig, MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitResponse,
+        DepenetrationConfig, MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitResponse,
     },
     collision::collider::Collider,
     parry::math::Rot3,
@@ -67,20 +67,30 @@ impl Plugin for KritMovementPlugin {
 /// SystemSet for Movement
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MovementSystems {
+    /// Moves data from Kore components to Movement Components
     Prepare,
+    /// Senses information about the controller surroundings
     Sense,
+    /// Handles Transitions (grounding, jumping, etc)
     Transition,
+    /// Steps simulation
     Step,
+    /// Applies Movement to the Character
     Apply,
+    /// Reports information about the Motion
     Report,
 }
 
+/// Context around how a Character should Step
 #[derive(Default, Clone, Debug)]
 pub struct StepContext {
+    /// Characters Intent for the Step
     intent: CharacterIntent,
+    /// Transform on entering the Step
     transform: Transform,
 }
 
+/// Report on how changes produced by a Step
 #[derive(Default, Clone, Debug)]
 pub struct StepReport {
     transform: Transform,
@@ -148,12 +158,18 @@ pub fn prepare_movement(
     mut characters: Query<(&mut MoveCommand, &CharacterIntent), With<CharacterController>>,
 ) {
     for (mut movement, intent) in characters.iter_mut() {
-        movement.wish_dir = intent.move_axis.extend(0.0).xzy().normalize();
+        movement.wish_dir = intent
+            .move_axis
+            .extend(0.0)
+            .xzy()
+            .normalize()
+            .rotate_y(intent.aim.yaw_rads());
         movement.wish_amount = intent.move_axis.length().min(1.0);
         movement.held = intent.buttons.clone();
     }
 }
 
+/// Handles Stepping motion during normal updates
 pub fn handle_movement(
     mut ctx: Query<
         (
@@ -214,6 +230,9 @@ pub fn handle_movement(
     }
 }
 
+/// Steps Motion Simulation
+/// Typically called each FixedUpdate
+/// but can be called repeatedly to simulate steps for server rollback
 pub fn step(
     entity: Entity,
     spatial: &MoveAndSlide,
@@ -240,6 +259,7 @@ pub fn step(
     }
 }
 
+/// Applies Movement to the Character
 pub fn apply_movement(
     mut characters: Query<(&mut Position, &BodyPose), With<CharacterController>>,
 ) {
@@ -250,17 +270,24 @@ pub fn apply_movement(
 
 /// Read-only borrows of the configuration. Not a component; built by the Step system.
 pub struct Tuning<'a> {
+    /// How to handle Movement
     pub profile: &'a MovementProfile,
+    /// Stats impacting Movement
     pub stats: &'a MovementStats,
+    /// Character Shape Info
     pub hull: &'a CharacterHull,
+    /// Collider
     pub collider: &'a Collider,
 }
 
 /// Mutable borrows of exactly the rolled-back state, plus the working position.
 /// Not a component; built by the Step system. If a field is here, rollback restores it.
 pub struct Motion<'a> {
+    /// current Body Post
     pub pose: &'a mut BodyPose,
+    /// Current Kinematic State
     pub kinematic: &'a mut KinematicState,
+    /// Current Movement State
     pub mode: &'a mut MovementState,
 }
 
@@ -281,19 +308,27 @@ pub struct CharacterController {}
 /// Describes the characteristics of the Character in question for physics purposes
 #[derive(Component, Default, Clone)]
 pub struct CharacterHull {
+    /// Shape to use for the Movement Collider
     pub shape: HullShape,
+    /// Width of the Character Shape
     pub radius: f32,
+    /// Full height of the Character
     pub standing_height: f32,
+    /// How far the Eyes are below the top of the shape
     pub eye_below_top: f32,
+    /// Distance to keep from objects
     pub skin_width: f32,
 }
 
 /// Describes the shape of the character
 #[derive(Default, Clone)]
 pub enum HullShape {
+    /// A Cylinder
     #[default]
     Cylinder,
+    /// A Capsule
     Capsule,
+    /// A Box
     Box,
 }
 
@@ -311,7 +346,9 @@ pub struct MovementStats {}
 /// Represents the current state of the movement
 #[derive(Component, Default, Clone)]
 pub enum MovementState {
+    /// Touching the Ground
     Ground,
+    /// In the Air
     #[default]
     Air,
 }
@@ -319,7 +356,9 @@ pub enum MovementState {
 /// Internal state of the movement engine
 #[derive(Component, Clone, Default, PartialEq, MapEntities)]
 pub struct KinematicState {
+    /// Current Controller Velocity
     pub velocity: Vec3,
+    /// Entity the Controller is grounded to
     #[entities]
     pub ground: Option<Entity>,
 }
@@ -341,25 +380,34 @@ pub struct MoveCommand {
     pub velocity_override: Option<VelocityOverride>,
 }
 
+/// Overrides on the Characters Velocity and Motion
 #[derive(Clone)]
 pub struct VelocityOverride {
-    velocity: Vec3,
-    mode: VelocityOverrideMode,
+    /// Velocity to Override By
+    pub velocity: Vec3,
+    /// How to Override
+    pub mode: VelocityOverrideMode,
 }
 
+/// How a Velocity Override should be applied
 #[derive(Clone)]
 pub enum VelocityOverrideMode {
+    /// Replaces the Velocity
     Replace,
+    /// Adds on top of the existing Velocity
     Add,
 }
 
-/// Copy of the position
+/// Copy of the Position/Rotation
 #[derive(Component, Clone, Default)]
 pub struct BodyPose {
+    /// Characters Global Position
     pub position: Vec3,
+    /// Characters Global Rotation
     pub rotation: Rot3,
 }
 
+/// Information about the Character Surroundings
 #[derive(Component, Clone, Default)]
 pub struct Surroundings {
     /// Walkable ground under the feet, if any. `None` means airborne.
@@ -368,13 +416,19 @@ pub struct Surroundings {
     pub stuck: bool,
 }
 
+/// A hit with the ground when probing for ground contact
+/// Can be anywhere from 0 -> Probe Distance below character
 #[derive(Clone)]
 pub struct GroundHit {
+    /// Relevant Entity
     pub entity: Entity,
+    /// Surface Normal at Hit
     pub normal: Dir3,
-    pub distance: f32, // gap between the feet and the ground, ≤ ground_probe_distance
+    /// Real Distance to the ground
+    pub distance: f32,
 }
 
+/// Event from the result of stepping the character motion simulation
 #[derive(Component, Clone, Default)]
 pub struct StepEvents {
     /// Mode and stance at the start of the tick, recorded by Prepare. Report compares them with
@@ -384,6 +438,8 @@ pub struct StepEvents {
     pub landed: Option<f32>,
     /// Vertical distance moved by a step-up (positive) or ground snap (negative), for camera smoothing.
     pub step_height: f32,
-    pub jumped: bool,   // Part 2
-    pub footstep: bool, // §9.3
+    /// If a Jump Started this Step
+    pub jumped: bool,
+    /// If there was a Footstep this Step
+    pub footstep: bool,
 }
