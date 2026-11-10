@@ -7,7 +7,7 @@ use avian3d::{
     collision::collider::Collider,
     parry::math::Rot3,
     physics_transform::{Position, Rotation},
-    spatial_query::{ShapeCastConfig, SpatialQuery, SpatialQueryFilter},
+    spatial_query::{ShapeCastConfig, SpatialQueryFilter},
 };
 use bevy_app::{App, FixedPostUpdate, Plugin};
 use bevy_ecs::{
@@ -47,11 +47,19 @@ impl Plugin for KritMovementPlugin {
         );
         app.add_systems(
             FixedPostUpdate,
+            (prepare_movement).in_set(MovementSystems::Prepare),
+        );
+        app.add_systems(
+            FixedPostUpdate,
             (sense_world).in_set(MovementSystems::Sense),
         );
         app.add_systems(
             FixedPostUpdate,
             (handle_movement).in_set(MovementSystems::Step),
+        );
+        app.add_systems(
+            FixedPostUpdate,
+            (apply_movement).in_set(MovementSystems::Apply),
         );
     }
 }
@@ -135,6 +143,17 @@ pub fn sense_world(
     }
 }
 
+/// Prepares Character Intent for Motion
+pub fn prepare_movement(
+    mut characters: Query<(&mut MoveCommand, &CharacterIntent), With<CharacterController>>,
+) {
+    for (mut movement, intent) in characters.iter_mut() {
+        movement.wish_dir = intent.move_axis.extend(0.0).xzy().normalize();
+        movement.wish_amount = intent.move_axis.length().min(1.0);
+        movement.held = intent.buttons.clone();
+    }
+}
+
 pub fn handle_movement(
     mut ctx: Query<
         (
@@ -204,7 +223,7 @@ pub fn step(
     motion: &Motion,
     dt: &Duration,
 ) -> StepReport {
-    let wish = command.wish_dir * command.wish_amount;
+    let wish = command.wish_dir * 10.0;
     let filter = SpatialQueryFilter::from_excluded_entities([entity]);
     let output = spatial.move_and_slide(
         tuning.collider,
@@ -218,6 +237,14 @@ pub fn step(
     );
     StepReport {
         transform: Transform::from_translation(output.position),
+    }
+}
+
+pub fn apply_movement(
+    mut characters: Query<(&mut Position, &BodyPose), With<CharacterController>>,
+) {
+    for (mut position, pose) in characters.iter_mut() {
+        position.0 = pose.position;
     }
 }
 

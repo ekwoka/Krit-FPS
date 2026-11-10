@@ -90,7 +90,7 @@ fn spawn_world(
         RigidBody::Kinematic
         ViewAngleOffset
         @player_context()
-        Transform::from_xyz(0.0, 0.0, 0.0)
+        Transform::from_xyz(0.0, 20.0, 0.0)
         ControllerCamera[
             Camera3d
         ]

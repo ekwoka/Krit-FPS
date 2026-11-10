@@ -110,7 +110,7 @@ pub fn apply_movement(
 ) {
     if let Ok(mut accumulated_inputs) = accumulated_inputs.get_mut(movement.context) {
         info!("Moving: {:?}", movement.value);
-        accumulated_inputs.move_axis = movement.value;
+        accumulated_inputs.move_axis = movement.value * Vec2::new(1.0, -1.0);
     }
 }
 
