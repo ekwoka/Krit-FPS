@@ -1,0 +1,85 @@
+[config]
+default_to_workspace = false
+load_cargo_aliases = true
+
+[tasks.default]
+alias = "build"
+
+[tasks.watch]
+dependencies = ["check"]
+run_task = { name = ["editor"], parallel = false }
+watch = true
+
+[tasks.editor]
+command = "cargo"
+args = ["run", "--features", "dev_native"]
+
+[tasks.watch-test]
+dependencies = ["check"]
+run_task = { name = ["nextest"], parallel = false }
+watch = true
+
+[tasks.watch-test-run]
+dependencies = ["check", "nextest"]
+run_task = { name = ["editor"], parallel = false }
+watch = true
+
+[tasks.check]
+command = "cargo"
+args = ["check", "--workspace"]
+
+[tasks.clippy]
+command = "cargo"
+args = ["clippy", "--workspace", "--allow-dirty", "--fix"]
+
+[tasks.nextest]
+command = "cargo"
+args = ["nextest", "--workspace"]
+
+[tasks.docs-deps]
+script = '''
+cargo doc --no-deps --target-dir /Volumes/Corsair/cargo-cache/target $({
+    cargo tree -p bevy --depth 3 --format "{p}" --prefix none | grep "bevy"
+    cargo tree --workspace --depth 1 --format "{p}" --prefix none
+  } \
+  | sed -E 's/^[^A-Za-z0-9_-]*//' \
+  | sed -E 's/^([A-Za-z0-9_-]+) v([0-9\.]+).*/-p \1@\2/' \
+  | sort -u)
+'''
+
+[tasks.docs-local]
+script = '''
+cargo doc --no-deps $({
+    cargo tree -p bevy --depth 3 --format "{p}" --prefix none | grep "bevy"
+    cargo tree --workspace --depth 1 --format "{p}" --prefix none
+  } \
+  | sed -E 's/^[^A-Za-z0-9_-]*//' \
+  | sed -E 's/^([A-Za-z0-9_-]+) v([0-9\.]+).*/-p \1@\2/' \
+  | sort -u)
+'''
+
+[tasks.fmt]
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.test-build]
+run_task = { name = ["nextest", "build"], parallel = false }
+
+[tasks.do-docs]
+run_task = { name = ["docs-deps"], parallel = false }
+
+[tasks.lint]
+run_task = { name = ["check", "clippy", "fmt"], parallel = false }
+
+[tasks.build-all]
+run_task = { name = ["build"], parallel = false }
+
+[tasks.precommit]
+run_task = { name = ["lint", "nextest", "build-all"], parallel = false }
+
+[tasks.build]
+command = "cargo"
+args = ["build"]
+
+[tasks.cranelift]
+script = "RUSTFLAGS=-Zcodegen-backend=cranelift cargo +nightly build"

@@ -109,7 +109,7 @@ pub fn move_camera(
 ) {
     for (camera, transform) in cameras.iter() {
         if let Ok(mut camera_transform) = transforms.get_mut(camera.get()) {
-            camera_transform.translation = transform.translation.clone();
+            camera_transform.translation = transform.translation;
         }
     }
 }

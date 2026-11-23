@@ -51,7 +51,7 @@ krit_movement = { path = "crates/krit_movement" }
 
 [workspace.metadata.bin]
 cargo-make = { version = "0.37.24", locked = false }
-cargo-nextest = { version = "0.9.151", locked = true }
+cargo-nextest = { version = "0.9.152", locked = true }
 cargo-watch = { version = "8.5.3", locked = true }
 
 [profile.dev]

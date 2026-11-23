@@ -112,12 +112,12 @@ pub fn sense_world(
     >,
     move_and_slide: MoveAndSlide,
 ) {
-    for (entity, mut pose, hull, mut surroundings, collider, position, rotation) in
+    for (entity, mut pose, _hull, mut surroundings, collider, position, rotation) in
         character.iter_mut()
     {
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-        pose.position = position.0.clone();
-        pose.rotation = rotation.0.clone();
+        pose.position = position.0;
+        pose.rotation = rotation.0;
         let offset = move_and_slide.depenetrate(
             collider,
             pose.position,
@@ -162,10 +162,10 @@ pub fn prepare_movement(
             .move_axis
             .extend(0.0)
             .xzy()
-            .normalize()
+            .normalize_or_zero()
             .rotate_y(intent.aim.yaw_rads());
         movement.wish_amount = intent.move_axis.length().min(1.0);
-        movement.held = intent.buttons.clone();
+        movement.held = intent.buttons;
     }
 }
 
@@ -226,7 +226,7 @@ pub fn handle_movement(
             &dt,
         );
         info!("Updating Movement: {:?}", report.transform.translation);
-        pose.position = report.transform.translation.clone();
+        pose.position = report.transform.translation;
     }
 }
 
@@ -238,7 +238,7 @@ pub fn step(
     spatial: &MoveAndSlide,
     tuning: &Tuning,
     command: &MoveCommand,
-    surroundings: &Surroundings,
+    _surroundings: &Surroundings,
     motion: &Motion,
     dt: &Duration,
 ) -> StepReport {
