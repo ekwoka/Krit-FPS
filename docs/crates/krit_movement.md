@@ -12,7 +12,7 @@
   profile override), `CharacterHull` (shape and standing/crouched/prone sizes), `MovementProfile`
   (an immutable asset: acceleration model, jump mode, step rule, slopes, timings; presets `Quake`,
   `Source`, `Arcade`, `Tactical`, `Immersive`) and `MovementStats` (speeds and accelerations,
-  computed through `krit_stats`). Design §1.2, §8.
+  computed through `krit_stats` from `BaseMovementStats`, which has matching presets). Design §1.2, §8.
 - **Motion state** (the rollback state): `KinematicState` (velocity, ground entity, tick timers, mode
   data) and `Stamina`. `MovementState` and `Stance` are also motion state but are defined in
   `krit_core` so other crates can read them. Design §1.3, §7.1.

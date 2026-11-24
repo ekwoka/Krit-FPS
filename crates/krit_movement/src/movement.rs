@@ -20,7 +20,7 @@ use bevy_ecs::{
 
 use bevy_math::{Dir3, Vec3, Vec3Swizzles};
 use bevy_time::Time;
-use bevy_transform::components::Transform;
+
 use krit_kore::{
     intent::{Buttons, CharacterIntent},
     sets::KritSimSystems,
@@ -79,21 +79,6 @@ pub enum MovementSystems {
     Apply,
     /// Reports information about the Motion
     Report,
-}
-
-/// Context around how a Character should Step
-#[derive(Default, Clone, Debug)]
-pub struct StepContext {
-    /// Characters Intent for the Step
-    intent: CharacterIntent,
-    /// Transform on entering the Step
-    transform: Transform,
-}
-
-/// Report on how changes produced by a Step
-#[derive(Default, Clone, Debug)]
-pub struct StepReport {
-    transform: Transform,
 }
 
 /// Senses the World, updates tracked position, and Depenetrates
@@ -183,6 +168,7 @@ pub fn handle_movement(
             &mut BodyPose,
             &mut KinematicState,
             &mut MovementState,
+            &mut StepEvents,
         ),
         With<CharacterController>,
     >,
@@ -201,13 +187,19 @@ pub fn handle_movement(
         mut pose,
         mut state,
         mut mode,
+        mut events,
     ) in ctx.iter_mut()
     {
         if surroundings.stuck {
             continue;
         }
         info!("stepping Movement");
-        let report = step(
+        let mut motion = Motion {
+            pose: pose.as_mut(),
+            kinematic: state.as_mut(),
+            mode: mode.as_mut(),
+        };
+        step(
             entity,
             &move_and_slide,
             &Tuning {
@@ -217,16 +209,12 @@ pub fn handle_movement(
                 collider,
             },
             command,
+            &mut motion,
+            events.as_mut(),
             surroundings,
-            &Motion {
-                pose: pose.as_mut(),
-                kinematic: state.as_mut(),
-                mode: mode.as_mut(),
-            },
             &dt,
         );
-        info!("Updating Movement: {:?}", report.transform.translation);
-        pose.position = report.transform.translation;
+        info!("Updating Movement: {:?}", pose.position);
     }
 }
 
@@ -238,10 +226,11 @@ pub fn step(
     spatial: &MoveAndSlide,
     tuning: &Tuning,
     command: &MoveCommand,
+    motion: &mut Motion,
+    _events: &mut StepEvents,
     _surroundings: &Surroundings,
-    motion: &Motion,
     dt: &Duration,
-) -> StepReport {
+) {
     let wish = command.wish_dir * 10.0;
     let filter = SpatialQueryFilter::from_excluded_entities([entity]);
     let output = spatial.move_and_slide(
@@ -254,9 +243,7 @@ pub fn step(
         &filter,
         |_| MoveAndSlideHitResponse::Accept,
     );
-    StepReport {
-        transform: Transform::from_translation(output.position),
-    }
+    motion.pose.position = output.position;
 }
 
 /// Applies Movement to the Character
@@ -301,7 +288,8 @@ pub struct Motion<'a> {
     Surroundings,
     BodyPose,
     KinematicState,
-    MovementState
+    MovementState,
+    StepEvents
 )]
 pub struct CharacterController {}
 
@@ -335,8 +323,120 @@ pub enum HullShape {
 /// Describes information about how the character should move,
 /// Acceleration, stepping, slopes, etc
 /// Should be immutable at runtime
-#[derive(Component, Default, Clone)]
-pub struct MovementProfile {}
+#[derive(Component, Clone)]
+pub struct MovementProfile {
+    // Gravity and Air
+    /// Acceleration due to Gravity (in m/s^2)
+    gravity: f32,
+    /// Maximum Air Speed (in m/s)
+    air_wishspeed_cap: Option<f32>,
+    /// Air Control modifer (multipler)
+    air_control: Option<f32>,
+    // Ground
+    /// Friction on ground surface
+    friction: f32,
+    stop_speed: f32,
+    accel_model: AccelModel,
+    decel: Option<f32>,
+
+    // Collision
+    step_height: f32,
+    step_rule: StepRule,
+    step_in_air: bool,
+    min_step_ledge_space: Option<f32>,
+    max_walk_slop_cos: f32,
+    ground_probe_distance: f32,
+    ground_snap_distance: f32,
+    unground_speed: f32,
+    overbounce: f32,
+    max_depenetration_iterations: usize,
+}
+
+impl Default for MovementProfile {
+    fn default() -> Self {
+        Self::QUAKE
+    }
+}
+
+impl MovementProfile {
+    const COMMON: Self = Self {
+        gravity: 20.0,
+        air_wishspeed_cap: None,
+        air_control: None,
+        accel_model: AccelModel::Arcade,
+        friction: 0.0,
+        stop_speed: 2.54,
+        decel: None,
+        step_height: 0.4,
+        step_rule: StepRule::FartherHorizontal,
+        step_in_air: false,
+        min_step_ledge_space: Some(0.1),
+        max_walk_slop_cos: 0.7,
+        ground_probe_distance: 0.05,
+        ground_snap_distance: 0.4,
+        unground_speed: 3.56,
+        overbounce: 1.0,
+        max_depenetration_iterations: 4,
+    };
+    const QUAKE: Self = Self {
+        gravity: 20.32,
+        air_wishspeed_cap: Some(0.76),
+        accel_model: AccelModel::QuakeProjection,
+        friction: 4.0,
+        step_height: 0.46,
+        step_rule: StepRule::WhenBlocked,
+        min_step_ledge_space: None,
+        ground_snap_distance: 0.46,
+        overbounce: 1.001,
+        ..Self::COMMON
+    };
+    const SOURCE: Self = Self {
+        gravity: 20.32,
+        air_wishspeed_cap: Some(0.76),
+        accel_model: AccelModel::QuakeProjection,
+        friction: 4.0,
+        step_height: 0.46,
+        min_step_ledge_space: None,
+        ground_snap_distance: 0.46,
+        ..Self::COMMON
+    };
+    const ARCADE: Self = Self {
+        air_control: Some(0.3),
+        stop_speed: 0.0,
+        decel: Some(50.0),
+        step_in_air: true,
+        ..Self::COMMON
+    };
+    const TACTICAL: Self = Self {
+        accel_model: AccelModel::Proper,
+        friction: 6.0,
+        decel: Some(50.0),
+        step_in_air: true,
+        ..Self::COMMON
+    };
+    const IMMERSIVE: Self = Self {
+        gravity: 18.0,
+        air_control: Some(0.1),
+        stop_speed: 0.0,
+        decel: Some(25.0),
+        ..Self::COMMON
+    };
+}
+
+#[derive(Default, Clone)]
+enum AccelModel {
+    QuakeProjection,
+    #[default]
+    Arcade,
+    Proper,
+}
+
+#[derive(Default, Clone)]
+enum StepRule {
+    WhenBlocked,
+    #[default]
+    FartherHorizontal,
+}
 
 /// Stats related to how the character moves
 /// Can be adjusted at runtime by equipment, buffs, debuffs

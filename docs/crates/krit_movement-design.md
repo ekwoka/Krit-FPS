@@ -127,8 +127,9 @@ pub struct CharacterHull {
 - `MovementProfile` is *how* the character moves: acceleration model, step rule, slope limit,
   timings. It is an immutable asset (RON, `assets` feature), referenced by `MovementProfileHandle` or
   replaced by `CharacterController::profile_override`. Nothing changes it at runtime.
-- `MovementStats` is *how fast and how strong*: speeds, accelerations, jump speed. The profile gives
-  the base values and `krit_stats` modifiers (item weight, a slowing effect, ADS) change them.
+- `MovementStats` is *how fast and how strong*: speeds, accelerations, jump speed. Its base values
+  come from a separate `BaseMovementStats` component (with its own presets, §8.4), and `krit_stats`
+  modifiers (item weight, a slowing effect, ADS) change them.
   Movement reads only the resulting `MovementStats`.
 
 The full field lists and presets are in §8. Part 1 uses `walk_speed`, `ground_accel`, `air_accel`,
@@ -633,8 +634,8 @@ A `MOVE` gate needs no check here: `Prepare` has already removed `JUMP` from `co
   allowed for a few ticks after walking off a ledge. Not after a jump: taking a jump sets
   `ticks_since_grounded` past the window.
 - **Jump velocity.** `jump_impulse` is `Set` (Quake 3, Source: `v.y = max(v.y, jump_speed)`) or `Add`
-  (QuakeWorld: `v.y += jump_speed`). A profile can give `jump_height` instead, and the loader
-  derives `jump_speed = sqrt(2·g·h)`.
+  (QuakeWorld: `v.y += jump_speed`). `jump_speed` is a stat (§8.4). A RON stats file can give
+  `jump_height` instead, and the loader derives `jump_speed = sqrt(2·g·h)` using the profile's gravity.
 - **Bunny-hop control.** `skip_friction_on_jump_tick` (true in `Quake` and `Source`) lets a perfectly
   timed jump keep all its speed. Setting it false is the simplest anti-bhop rule; `bhop_speed_cap`
   (scale `v.xz` down to the cap on jump, CS:GO style) is the other.
@@ -1023,17 +1024,25 @@ pub struct KinematicState {
 
 ## 8. Reference: profiles and stats
 
+A preset is three values defined together: a `MovementProfile` (how the character moves, §8.3), a
+`BaseMovementStats` (how fast and how strong before modifiers, §8.4) and a `CharacterHull` (§8.5).
+Each is an associated constant on its own type (`MovementProfile::SOURCE`,
+`BaseMovementStats::SOURCE`, `CharacterHull::SOURCE`), so a game can mix them, for example a `Source`
+profile with its own speeds.
+
 ### 8.1 `MovementStats`
 
-| Field | `StatId` | Base from profile |
+| Field | `StatId` | Base |
 |---|---|---|
-| `walk_speed`, `sprint_speed`, `crouch_speed`, `prone_speed`, `swim_speed`, `ladder_speed` | `move.speed.*` | yes |
-| `ground_accel`, `air_accel` | `move.accel.*` | yes |
-| `jump_speed` | `move.jump` | yes (or derived from `jump_height`) |
-| `gravity_scale` | `move.gravity_scale` | 1.0 |
-| `max_stamina`, `stamina_regen` | `move.stamina.*` | yes |
+| `walk_speed`, `sprint_speed`, `crouch_speed`, `prone_speed`, `swim_speed`, `ladder_speed` | `move.speed.*` | `BaseMovementStats` |
+| `ground_accel`, `air_accel` | `move.accel.*` | `BaseMovementStats` |
+| `jump_speed` | `move.jump` | `BaseMovementStats` (a RON file may give `jump_height` instead, §2.3) |
+| `gravity_scale` | `move.gravity_scale` | `BaseMovementStats`, 1.0 in every preset |
+| `max_stamina`, `stamina_regen` | `move.stamina.*` | `BaseMovementStats` |
 
-Two items that each multiply speed by 0.9 give 0.81 (`krit_stats` multiplies; arch §5.2).
+The profile holds no speeds. `BaseMovementStats` has the same fields as `MovementStats` and is never
+modified; `krit_stats` recomputes `MovementStats` from it and the current modifiers (arch P7). Two
+items that each multiply speed by 0.9 give 0.81 (`krit_stats` multiplies; arch §5.2).
 
 ### 8.2 `MovementProfile` fields
 
@@ -1044,40 +1053,149 @@ All durations are in seconds; the step converts them to ticks (§2.1).
 | Gravity and air | `gravity`, `air_wishspeed_cap: Option<f32>`, `air_control` (Arcade only) | 1 |
 | Ground | `friction`, `stop_speed`, `accel_model`, `decel` (Arcade only) | 1 |
 | Collision | `step_height`, `step_rule`, `step_in_air`, `min_step_ledge_space`, `max_walk_slope_cos`, `ground_probe_distance`, `ground_snap_distance`, `unground_speed`, `overbounce`, `max_depenetration_iterations` | 1 |
-| Jump | `jump_mode`, `jump_impulse`, `jump_height` or base `jump_speed`, `skip_friction_on_jump_tick`, `coyote_time`, `bhop_speed_cap`, `crouch_jump` | 2 |
+| Jump | `jump_mode`, `jump_impulse`, `skip_friction_on_jump_tick`, `coyote_time`, `bhop_speed_cap`, `crouch_jump` | 2 |
 | Fall | `fall_safe_speed`, `fall_fatal_speed`, `fall_damage_curve`, `land_effect_speed` | 2 |
 | Stance | `crouch_time`, `uncrouch_time`, `prone_time`, `crouch_in_air` | 3 |
 | Sprint and stamina | `sprint_min_forward`, `sprint_in_air`, `sprint_drain`, `jump_stamina_cost`, `stamina_regen_delay` | 4 |
 | Modes | slide (`slide_min_speed`, `slide_exit_speed`, `slide_boost`, `slide_friction`, `slide_max_time`), ladder (`ladder_jump_speed`, `ladder_look_down_pitch`), swim (`water_accel`, `water_friction`, `water_sink_speed`, `buoyant`), mantle (`mantle_reach`, `min/max_mantle_height`, `mantle_duration`, `auto_mantle`), `noclip_speed` | 4 |
 | Platforms and pushing | `inherit_platform_velocity`, `push_strength` | 5 |
-| Spread | `spread_speed_ref`, `spread_air` (§9.1) | – |
+| Spread | `spread_speed_ref: Option<f32>`, `spread_air` (§9.1) | – |
 
-### 8.3 Presets
+### 8.3 `MovementProfile` presets
 
-`Quake` and `Source` use the verified lineage constants. The other three are starting points to tune;
-their numbers are not from any reference.
+How to read the preset tables (§8.3–§8.5):
+
+- **†** marks a lineage constant, converted at 1 u = 0.0254 m. Everything else is a chosen starting
+  value to tune, not taken from any reference.
+- **`Quake` follows Quake 3** wherever QuakeWorld differs; QW values are shown in brackets for
+  reference only.
+- *Italic* values belong to a plugin the preset usually leaves off (§8.6). They are there only so
+  the constant is complete and the plugin behaves sensibly if a game turns it on.
+- **–** means the field is ignored by the preset's `accel_model`. The constant sets it to 0.
 
 | Field | `Quake` | `Source` | `Arcade` | `Tactical` | `Immersive` |
 |---|---|---|---|---|---|
-| `gravity` (m/s²) | 20.32 | 20.32 (HL2: 15.24) | ~20 | ~20 | ~18 |
-| `walk_speed` (m/s) | 8.13 | 8.13 cap | ~7 | ~5, ADS lower | ~4.5 |
+| **Gravity and air** | | | | | |
+| `gravity` (m/s²) | 20.32† | 20.32† (HL2: 15.24†) | 20 | 20 | 18 |
+| `air_wishspeed_cap` (m/s) | none† [QW: 0.76†] | 0.76† | none | none | none |
+| `air_control` (× `ground_accel`) | – | – | 0.3 | – | 0.1 |
+| **Ground** | | | | | |
 | `accel_model` | `QuakeProjection` | `QuakeProjection` | `Arcade` | `Proper` | `Arcade` |
-| `ground_accel` | 10 | 10 | high | 10 | moderate |
-| `air_accel` | 0.7 (QW) / 1.0 (Q3) | 10 | `air_control` ~0.3 | 1 | low |
-| `air_wishspeed_cap` | 0.76 (QW) / none (Q3) | 0.76 | – | – | – |
-| `friction` / `stop_speed` | 4 (QW) or 6 (Q3) / 2.54 | 4 / 2.54 | – (decel) | 6 / 2.54 | – (decel) |
-| `jump_speed` (m/s) | 6.86 | 6.81 (HL2: 4.06) | from height ~1.2 m | low | low |
-| `jump_mode` | `RequireRelease` | `PressEdge` | `Buffered`, coyote ~0.1 s | `RequireRelease` | `Buffered` |
-| `skip_friction_on_jump_tick` | true | true | – | false | – |
-| `step_height` (m) | 0.46 | 0.46 | 0.4 | 0.4 | 0.4 |
-| `step_rule` | `WhenBlocked` | `FartherHorizontal` | `FartherHorizontal` | `FartherHorizontal` | `FartherHorizontal` |
-| `max_walk_slope_cos` | 0.7 | 0.7 | 0.7 | 0.7 | 0.7 |
-| `crouch_time` / `uncrouch_time` (s) | 0 / 0 | 0.4 / 0.2 (HL2) | 0.15 / 0.15 | 0.3 / 0.3 | 0.25 / 0.25 |
-| `crouch_in_air` | `ShrinkTop` | `TuckLegs` | `TuckLegs` | `ShrinkTop` | `TuckLegs` |
-| `overbounce` | 1.001 | 1.0 | 1.0 | 1.0 | 1.0 |
-| `fall_safe` / `fall_fatal` (m/s) | events only | 14.7 / 26.0 | off | 12 / 22 | 12 / 22 |
-| Plugins usually on | core, look, crouch | + ladder, swim, fall damage | + slide, mantle, sprint | + sprint, stamina, prone, fall damage | + ladder, swim, mantle, stamina |
-| Hull (radius × standing / crouched, eye) | 0.38 × 1.42 / 1.02, eye 1.27 (Q3) | 0.41 × 1.83 / 0.91, eye 1.63 / 0.71 | 0.4 × 1.8 / 1.1 | 0.35 × 1.8 / 1.2 | 0.35 × 1.75 / 1.1 |
+| `friction` | 6† [QW: 4†] | 4† | – | 6 | – |
+| `stop_speed` (m/s) | 2.54† | 2.54† | – | 2.54 | – |
+| `decel` (m/s²) | – | – | 50 | – | 25 |
+| **Collision** | | | | | |
+| `step_height` (m) | 0.46† | 0.46† | 0.4 | 0.4 | 0.4 |
+| `step_rule` | `WhenBlocked`† | `FartherHorizontal`† | `FartherHorizontal` | `FartherHorizontal` | `FartherHorizontal` |
+| `step_in_air` | false | false | true | false | false |
+| `min_step_ledge_space` (m) | 0 (no check) | 0 (no check) | 0.1 | 0.1 | 0.1 |
+| `max_walk_slope_cos` | 0.7† | 0.7† | 0.7 | 0.7 | 0.7 |
+| `ground_probe_distance` (m) | 0.05 | 0.05 (2 u†) | 0.05 | 0.05 | 0.05 |
+| `ground_snap_distance` (m) | 0.46 | 0.46 | 0.4 | 0.4 | 0.4 |
+| `unground_speed` (m/s) | 3.56 | 3.56† | 3.56 | 3.56 | 3.56 |
+| `overbounce` | 1.001† | 1.0† | 1.0 | 1.0 | 1.0 |
+| `max_depenetration_iterations` | 4 | 4 | 4 | 4 | 4 |
+| **Jump** | | | | | |
+| `jump_mode` | `RequireRelease`† | `PressEdge`† | `Buffered { window: 0.1 }` | `RequireRelease` | `Buffered { window: 0.15 }` |
+| `jump_impulse` | `Set`† [QW: `Add`†] | `Set`† | `Set` | `Set` | `Set` |
+| `skip_friction_on_jump_tick` | true† | true† | – | false | – |
+| `coyote_time` (s) | 0† | 0† | 0.1 | 0 | 0.1 |
+| `bhop_speed_cap` (m/s) | none | none | none | none | none |
+| `crouch_jump` | true | true | true | false | true |
+| **Fall** | | | | | |
+| `fall_safe_speed` (m/s) | none (facts only) | 14.7† | none | 12 | 12 |
+| `fall_fatal_speed` (m/s) | none | 26.0† | none | 22 | 22 |
+| `fall_damage_curve` | *`Linear`* | `Linear`† | *`Linear`* | `Linear` | `Linear` |
+| `land_effect_speed` (m/s) | 5.08 | 5.08† | 5.08 | 5.08 | 5.08 |
+| **Stance** | | | | | |
+| `crouch_time` (s) | 0† | 0.4† (HL2) | 0.15 | 0.3 | 0.25 |
+| `uncrouch_time` (s) | 0† | 0.2† (HL2) | 0.15 | 0.3 | 0.25 |
+| `prone_time` (s) | *0.8* | *0.8* | *0.8* | 0.8 | *0.8* |
+| `crouch_in_air` | `ShrinkTop`† | `TuckLegs`† | `TuckLegs` | `ShrinkTop` | `TuckLegs` |
+| **Sprint and stamina** | | | | | |
+| `sprint_min_forward` | *0.5* | *0.5* | 0.5 | 0.5 | *0.5* |
+| `sprint_in_air` | *false* | *false* | true | false | *false* |
+| `sprint_drain` (/s) | *15* | *15* | *15* | 15 | *10* |
+| `jump_stamina_cost` | *15* | *15* | *15* | 15 | 10 |
+| `stamina_regen_delay` (s) | *1.0* | *1.0* | *1.0* | 1.0 | 1.5 |
+| **Slide** | | | | | |
+| `slide_min_speed` (m/s) | *6.0* | *6.0* | 6.0 | *4.5* | *4.0* |
+| `slide_exit_speed` (m/s) | *3.0* | *3.0* | 3.0 | *2.5* | *2.0* |
+| `slide_boost` (m/s) | *2.0* | *2.0* | 2.0 | *1.0* | *0.5* |
+| `slide_friction` | *1.0* | *1.0* | 1.0 | *1.5* | *2.0* |
+| `slide_max_time` (s) | *1.0* | *1.0* | 1.0 | *0.8* | *0.8* |
+| **Ladder** | | | | | |
+| `ladder_jump_speed` (m/s) | *6.86* | 6.86† | *5.0* | *4.0* | 4.0 |
+| `ladder_look_down_pitch` (°) | *30* | 30 | *30* | *30* | 30 |
+| **Swim** | | | | | |
+| `water_accel` | *4*† | 10† | *8* | *6* | 4 |
+| `water_friction` | *1*† | 1† | *1* | *1* | 2 |
+| `water_sink_speed` (m/s) | *1.52*† | 1.52† | *1.0* | *1.5* | 1.0 |
+| `buoyant` | *false* | false | *true* | *false* | true |
+| **Mantle** | | | | | |
+| `mantle_reach` (m) | *0.6* | *0.6* | 0.6 | *0.6* | 0.6 |
+| `min_mantle_height` (m) | *0.5* | *0.5* | 0.5 | *0.5* | 0.5 |
+| `max_mantle_height` (m) | *1.6* | *1.6* | 1.8 | *1.2* | 1.6 |
+| `mantle_duration` (s) | *0.4* | *0.4* | 0.35 | *0.6* | 0.6 |
+| `auto_mantle` | *false* | *false* | true | *false* | false |
+| **Noclip** | | | | | |
+| `noclip_speed` (m/s) | 10 | 10 | 10 | 10 | 10 |
+| **Platforms and pushing** | | | | | |
+| `inherit_platform_velocity` | true | true | true | true | true |
+| `push_strength` | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| **Spread** | | | | | |
+| `spread_speed_ref` (m/s) | none (= `walk_speed`) | none | none | none | none |
+| `spread_air` | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+
+Rows with the same value in every column (collision tolerances, noclip, platforms, spread) are
+engine defaults rather than feel. A game is unlikely to tune them per preset, but they stay in the
+profile so a single character can still override them.
+
+### 8.4 `BaseMovementStats` presets
+
+`ground_accel` and `air_accel` use the units of the profile's `accel_model`. For `QuakeProjection`
+and `Proper` they are rates (per second, scaled by `wishspeed`). For `Arcade` they are m/s², and
+the air rate is `ground_accel × air_control`, so `air_accel` is ignored.
+
+| Field | `Quake` | `Source` | `Arcade` | `Tactical` | `Immersive` |
+|---|---|---|---|---|---|
+| `walk_speed` (m/s) | 8.13† | 8.13† (`sv_maxspeed`; HL2 walk: 4.83†) | 7.0 | 5.0 | 4.5 |
+| `sprint_speed` (m/s) | *8.13* | *8.13* (HL2 suit sprint†) | 9.5 | 7.0 | *6.5* |
+| `crouch_speed` (m/s) | 2.03† | 2.71† | 3.5 | 2.5 | 2.2 |
+| `prone_speed` (m/s) | *1.0* | *1.0* | *1.0* | 1.0 | *0.8* |
+| `swim_speed` (m/s) | *4.06*† | 6.50† | *4.5* | *3.0* | 3.0 |
+| `ladder_speed` (m/s) | *5.08* | 5.08† | *4.0* | *2.5* | 2.5 |
+| `ground_accel` | 10† | 10† | 60 (m/s²) | 10 | 20 (m/s²) |
+| `air_accel` | 1.0† [QW: 0.7†] | 10† | – | 1 | – |
+| `jump_speed` (m/s) | 6.86† | 6.81† (HL2: 4.06†) | 6.93 (≈ 1.2 m) | 4.90 (≈ 0.6 m) | 4.65 (≈ 0.6 m) |
+| `gravity_scale` | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| `max_stamina` | *100* | *100* | *100* | 100 | 100 |
+| `stamina_regen` (/s) | *20* | *20* | *20* | 20 | 15 |
+
+The jump heights in brackets are `jump_speed² / 2g` with the preset's gravity.
+
+### 8.5 `CharacterHull` presets
+
+All presets use the default `Cylinder` shape (§1.2); `Box` with the same radius gives the lineage
+AABB feel. `eye_below_top` is measured from the top of the current hull, so the crouched eye is
+`crouched_height − eye_below_top`.
+
+| Field | `Quake` | `Source` | `Arcade` | `Tactical` | `Immersive` |
+|---|---|---|---|---|---|
+| `radius` (m) | 0.38† | 0.41† | 0.40 | 0.35 | 0.35 |
+| `standing_height` (m) | 1.42† | 1.83† | 1.80 | 1.80 | 1.75 |
+| `crouched_height` (m) | 1.02† | 0.91† | 1.10 | 1.20 | 1.10 |
+| `prone_height` (m) | *0.60* | *0.60* | *0.60* | 0.60 | *0.60* |
+| `eye_below_top` (m) | 0.15† (eye 1.27) | 0.20† (eye 1.63 / 0.71) | 0.15 | 0.15 | 0.15 |
+| `skin_width` (m) | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+
+### 8.6 Plugins usually on
+
+Every preset assumes `MovementCore`, `MovementLook` and `MovementCrouch`. On top of those:
+
+| `Quake` | `Source` | `Arcade` | `Tactical` | `Immersive` |
+|---|---|---|---|---|
+| – | ladder, swim, fall damage | slide, mantle, sprint | sprint, stamina, prone, fall damage | ladder, swim, mantle, stamina |
 
 The tick rate is part of the feel: Quake friction is linear per tick, so 30 Hz and 128 Hz feel
 slightly different with the same numbers. Presets are tuned and tested at the default tick rate.
