@@ -79,7 +79,7 @@ run_task = { name = ["lint", "nextest", "build-all"], parallel = false }
 
 [tasks.build]
 command = "cargo"
-args = ["build"]
+args = ["build", "--workspace"]
 
 [tasks.cranelift]
-script = "RUSTFLAGS=-Zcodegen-backend=cranelift cargo +nightly build"
+script = "RUSTFLAGS=-Zcodegen-backend=cranelift cargo +nightly build --workspace"
