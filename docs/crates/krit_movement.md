@@ -42,11 +42,13 @@ step) → Apply (write the backend body) → Report (read models and facts). Des
 
 ```rust
 fn step(world: &dyn CollisionQuery, tuning: &Tuning, command: &MoveCommand,
-        sensed: &Surroundings, motion: &mut Motion, events: &mut StepEvents, dt: f32)
+        request: Option<&ModeEntry>, sensed: &Surroundings, prev: &MotionState,
+        dt: f32) -> StepResult  // { state, events }
 ```
 
-is pure (no ECS access), which makes it unit-testable and rollback-safe. Unit tests check known
-numbers: jump apex ≈ `v²/2g`, top ground speed converging to the profile cap, and positive strafe
+is a pure transition (no ECS access, nothing mutated): the caller writes the result to components
+or feeds it back in for resimulation, which makes it unit-testable and rollback-safe. Unit tests
+check known numbers: jump apex ≈ `v²/2g`, top ground speed converging to the profile cap, and positive strafe
 gain only when `air_wishspeed_cap` is set.
 
 The API has three extension tiers, following the Unity Character Controller package (design §11):

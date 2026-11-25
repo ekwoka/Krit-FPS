@@ -64,10 +64,10 @@ KritSimSystems::Movers     moving platforms move and record MoverDelta          
 KritSimSystems::Aim        ViewAngles = clamp(intent.aim + ViewAngleOffset)             (§6)
 KritSimSystems::Movement
   Prepare     CharacterIntent + ButtonEdges + ActionGates + ViewAngles ──▶ MoveCommand
-              ExternalImpulse ──▶ KinematicState.velocity;  StepEvents cleared
+              ExternalImpulse ──▶ KinematicState.velocity
   Sense       backend position ──▶ BodyPose;  ride mover, depenetrate, probe ──▶ Surroundings
-  Transition  Surroundings + MoveCommand ──▶ MovementState   (special modes only, Part 4)
-  Step        step(…) updates BodyPose and the motion state ──▶ StepEvents
+  Transition  Surroundings + MoveCommand + MovementState ──▶ ModeRequest   (special modes only, Part 4)
+  Step        step(prev MotionState, ModeRequest, …) ──▶ StepResult ──▶ BodyPose, KinematicState, MovementState, StepEvents
   Apply       BodyPose, velocity, hull, yaw ──▶ backend body
   Report      StepEvents + motion state ──▶ Locomotion, EyeHeight, MovementSpreadFactor, facts
 ```
@@ -94,7 +94,8 @@ else in this part with default values, so the line above is a complete, working 
 ```rust
 #[derive(Component, Default)]
 #[require(CharacterHull, KinematicState, MovementState, BodyPose, Surroundings, MoveCommand,
-          StepEvents, Locomotion, EyeHeight, MovementSpreadFactor, ViewAngles, ViewAngleOffset)]
+          ModeRequest, StepEvents, Locomotion, EyeHeight, MovementSpreadFactor, ViewAngles,
+          ViewAngleOffset)]
 pub struct CharacterController {
     /// Replaces the profile asset for this one character (bosses, tests, debug tuning).
     pub profile_override: Option<MovementProfile>,
@@ -168,8 +169,8 @@ can only ever be stale.
 
 ### 1.4 The intermediate data, and why each piece exists
 
-Four components exist only to hand data from one stage to the next within a single tick. They are
-`Derived` (never replicated, never rolled back) and are fully overwritten every tick, so a stale
+Five components exist only to hand data from one stage to the next within a single tick. They are
+`Derived` (never replicated, never rolled back) and are fully overwritten or consumed every tick, so a stale
 value can never survive into the next one.
 
 #### `MoveCommand`: what the character asks for this tick, in world terms
@@ -193,7 +194,7 @@ pub struct MoveCommand {
 ```
 
 - **Built by** `Prepare`, from `CharacterIntent`, `ButtonEdges`, `ActionGates` and `ViewAngles.yaw`
-  (§1.7.1 has the formula).
+  (§1.7.4 has the formula).
 - **Read by** `Transition` and `Step`.
 - **Why it exists:** `CharacterIntent` is local-space and ungated. Three separate concerns turn it
   into something physics can use: rotating `move_axis` by the facing, applying gates (a `MOVE` gate
@@ -258,26 +259,54 @@ pub struct GroundHit {
 ```rust
 #[derive(Component, Clone, Default)]
 pub struct StepEvents {
-    /// Mode and stance at the start of the tick, recorded by Prepare. Report compares them with
-    /// the final values to emit MovementStateChanged / StanceChanged exactly once.
-    pub start_mode: MovementState,
-    pub start_stance: Stance,                 // Part 3
     /// Vertical speed at touchdown, if the character landed this tick.
     pub landed: Option<f32>,
     /// Vertical distance moved by a step-up (positive) or ground snap (negative), for camera smoothing.
     pub step_height: f32,
     /// Every surface the slide touched: entity, normal, impact speed.
     pub contacts: SmallVec<[Contact; 8]>,
+    /// Walkable ground at the end of the step (the re-probe), if any. `Surroundings.ground` is the
+    /// start of the tick, which is `None` on a landing tick.
+    pub ground: Option<GroundHit>,
+    /// The mode at the start of the tick and at the end, if they differ.
+    pub mode_changed: Option<ModeChange>,     // ModeChange { from, to }
+    pub stance_changed: Option<StanceChange>, // Part 3
     pub jumped: bool,                         // Part 2
     pub footstep: bool,                       // §9.3
 }
 ```
 
-- **Cleared by** `Prepare`, **filled by** `Transition` and `Step`, **read by** `Report`.
+- **Built fresh by each `step` call** and returned in `StepResult` (§1.7.1); the `Step` system
+  writes it to the component, and `Report` reads it.
 - **Why it exists:** the step is a pure function and cannot send messages or trigger events. It
   records what happened here, and `Report` turns the record into facts through core's `emit_fact`,
   which also suppresses observer triggers while resimulating (arch §4.1–4.2). Keeping fact emission
-  in one place means a custom step (Part 4, §11) gets facts for free by filling the same record.
+  in one place means a custom step (Part 4, §11) gets facts for free by returning the same record.
+- **Mode and stance changes are recorded here, not reconstructed by Report.** The step is the only
+  writer of `MovementState` and `Stance`, so it knows both ends of the tick and records the change
+  at most once, however many Transition systems weighed in.
+
+#### `ModeRequest`: which mode Transition wants the step to run in
+
+```rust
+#[derive(Component, Clone, Default)]
+pub struct ModeRequest(pub Option<ModeEntry>);
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct ModeEntry {
+    pub mode: MovementState,
+    pub data: ModeData,        // Part 4: the mode's starting data (a mantle's path, a ladder's normal)
+}
+```
+
+- **Written by** `Transition` systems (§4.2). **Taken by** the `Step` system, which passes it to
+  `step` and leaves `None` behind.
+- **Why it exists:** if Transition wrote `MovementState` directly, the mode would have two writers
+  in one tick, and the step would never see the mode the tick started in. As a request, Transition
+  can still decide everything (later systems overwrite earlier ones, so priority still works), but
+  the step applies it, and `prev.mode` stays the true start of the tick. Carrying `ModeData` in the
+  request does the same for `KinematicState.mode_data`, which would otherwise also have two writers.
+- **Part 1 never writes one**: `Ground` and `Air` are settled by the step itself.
 
 ### 1.5 Schedule
 
@@ -293,7 +322,7 @@ KritSimSystems::Aim         MovementLook (§6)
    AimSystems::Compose        ViewAngles = clamp(intent.aim + ViewAngleOffset)
    AimSystems::Recoil         AimRecoil decay
 KritSimSystems::Movement    MovementCore and feature plugins
-   MovementSystems::Prepare     build MoveCommand; apply ExternalImpulse; clear StepEvents
+   MovementSystems::Prepare     build MoveCommand; apply ExternalImpulse
    MovementSystems::Sense       BodyPose from the backend; ride; depenetrate; build Surroundings
    MovementSystems::Transition  enter/leave special modes (Part 4); built-in, then game systems
    MovementSystems::Step        the pure step (§1.7), one call per character
@@ -368,175 +397,558 @@ ground = hit if  hit.normal.y >= max_walk_slope_cos
 
 ### 1.7 The step
 
-`MovementSystems::Step` calls one pure function per character. It has no ECS access; everything it
-needs is passed in, so the same function serves the live game, unit tests, rollback resimulation and
-a server stepping bots. Its signature is fixed from Part 1 onward; later parts only use more of what
-is passed in.
+The step is a **transition function**. It takes the motion state at the start of a tick and returns
+the motion state at the end, plus a record of what happened. It reads nothing from the ECS and
+writes nothing anywhere. Whatever calls it decides what to do with the result: write it to
+components (the live tick), feed it straight back in (rollback resimulation, a server stepping bots,
+a test running a trajectory), or throw it away (a prediction preview).
+
+```
+                 ┌──────────── Tuning ─────────────┐
+                 │ profile, stats, hull            │
+                 └────────────────┬────────────────┘
+ MoveCommand ────────────────────┐ │
+ ModeRequest ────────────────────┐│ │
+ Surroundings ──────────────────┐││ │
+ MotionState (prev) ───────────┐│││ │
+ dt ──────────────────────────┐││││ │
+                              ▼▼▼▼▼ ▼
+                           step(world, …) ──▶ StepResult { state: MotionState, events: StepEvents }
+```
+
+The step is also the **only writer of `MovementState`**. `Transition` systems decide which mode a
+character should be in, but they write a `ModeRequest` rather than the mode itself (§4.2); the step
+applies the request first. So `prev.mode` is always the mode the tick started in, and the step can
+report the change itself instead of something else remembering the starting mode.
+
+#### 1.7.1 Inputs and outputs
 
 ```rust
 pub fn step(
-    world: &dyn CollisionQuery,   // object-safe, so tests can pass an analytic world
-    tuning: &Tuning,              // what the character is
-    command: &MoveCommand,        // what it wants
-    sensed: &Surroundings,        // what is around it
-    motion: &mut Motion,          // what it is doing; updated in place
-    events: &mut StepEvents,      // what happened
-    dt: f32,
-);
+    world: &dyn CollisionQuery,  // scoped to this character: excludes its own body, applies its layers
+    tuning: &Tuning,             // what the character is            (configuration, §1.2)
+    command: &MoveCommand,       // what it wants this tick          (command, §1.4)
+    request: Option<&ModeEntry>, // mode Transition asked for, if any (command, §4.2; always None in Part 1)
+    sensed: &Surroundings,       // what is around it at tick start  (surroundings, §1.6)
+    prev: &MotionState,          // what it was doing                (motion state, §1.3)
+    dt: f32,                     // Time<Fixed>::delta_secs()
+) -> StepResult;
 
-/// Read-only borrows of the configuration. Not a component; built by the Step system.
+/// Read-only borrows of the configuration. Not a component; built by whoever calls `step`.
 pub struct Tuning<'a> {
     pub profile: &'a MovementProfile,
     pub stats: &'a MovementStats,
     pub hull: &'a CharacterHull,
 }
 
-/// Mutable borrows of exactly the rolled-back state, plus the working position.
-/// Not a component; built by the Step system. If a field is here, rollback restores it.
-pub struct Motion<'a> {
-    pub pose: &'a mut BodyPose,
-    pub kinematic: &'a mut KinematicState,
-    pub mode: &'a mut MovementState,
-    pub stance: &'a mut Stance,              // Part 3; always Standing before that
-    pub stamina: Option<&'a mut Stamina>,    // Part 4; None without MovementStamina
+/// Everything the step carries from one tick to the next, by value. This is exactly the rollback
+/// state of §0.2: if a field is here, a snapshot holds it; if the step reads something from the
+/// previous tick, it must be here, or resimulation drifts from the live result.
+#[derive(Clone, PartialEq, Debug)]
+pub struct MotionState {
+    pub pose: BodyPose,               // body position, after Sense rode and depenetrated it
+    pub kinematic: KinematicState,    // velocity, ground entity, timers
+    pub mode: MovementState,          // the mode the tick starts in; Transition doesn't touch it
+    // Part 3: pub stance: Stance,
+    // Part 4: pub stamina: Option<Stamina>,   // None without MovementStamina
+}
+
+pub struct StepResult {
+    pub state: MotionState,
+    pub events: StepEvents,           // §1.4; built fresh by each call
 }
 ```
 
-`Tuning` and `Motion` are only borrow bundles: they keep the signature stable as later parts add
-state, and they make "what is rolled back" visible in the type.
+`world` is scoped to one character before the call (it excludes the character's own collider and
+applies its collision layers), so nothing inside the step names an `Entity` or builds a filter.
 
-**Part 1 order.** If `sensed.stuck`, skip to the end of the step — keep the velocity and leave the
-position unchanged (per §1.6); this is the same skip §4.3 lands at "end of tick". Otherwise:
+Where every value comes from, what the step calls it, and where the result goes on a live tick:
 
-1. **Friction** (§1.7.2), if grounded.
-2. **Accelerate** (§1.7.3) toward `wish_dir × wish_amount × walk_speed`, with ground or air
-   parameters.
-3. **First half of gravity**, if airborne: `v.y −= g·dt/2`.
-4. **Move.** Grounded: `step_move` (§1.7.5), then `snap_down`. Airborne: `slide` (§1.7.4).
-5. **Probe the ground again** from the new position (§1.6).
-6. **Second half of gravity**, if still airborne. If grounded, clip `v` against the ground plane
-   instead, so walking down a slope doesn't build up downward speed.
-7. **Settle the mode.** Set `MovementState` to `Ground` or `Air` from step 5 and store the ground
-   entity in `KinematicState.ground`. If the mode was `Air` at the start and is `Ground` now, record
-   `events.landed = Some(−v.y)`, measured before step 6 clipped it.
+| Value | Comes from | In the step | Goes to |
+|---|---|---|---|
+| `CharacterIntent.move_axis` + `ViewAngles.yaw` | input / bot, aim stage | `command.wish_dir`, `command.wish_amount` (built in Prepare, §1.7.4) | – |
+| `MovementStats` | `BaseMovementStats` + `krit_stats` modifiers | `tuning.stats.walk_speed`, `.ground_accel`, `.air_accel`, `.gravity_scale` | – |
+| `MovementProfile` | asset or `CharacterController::profile_override` | `tuning.profile.*` | – |
+| `CharacterHull` | spawn / archetype | `tuning.hull` (shape for every cast) | – |
+| backend body position | avian `Position`, copied by Sense | `prev.pose.position` | `state.pose` → `BodyPose` → Apply → avian `Position` |
+| `KinematicState` | last tick's result (or a rollback snapshot) | `prev.kinematic.velocity` | `state.kinematic` → `KinematicState`; Apply copies `velocity` → avian `LinearVelocity` |
+| `MovementState` | last tick's result (or a rollback snapshot) | `prev.mode` | `state.mode` → `MovementState` → next tick's Transition and step |
+| `ModeRequest` | Transition systems (§4.2) | `request` (taken by the Step system, so it never outlives the tick) | applied to `state.mode` and `kinematic.mode_data` |
+| mode / stance change | the step, comparing `prev` with the final state | – | `events.mode_changed`, `events.stance_changed` → Report (`MovementStateChanged`, `StanceChanged`) |
+| ground under the feet | Sense (§1.6) | `sensed.ground`, `sensed.stuck` | – (re-measured, never stored) |
+| ground after the move | re-probed inside the step | – | `events.ground` → Report (`Locomotion.grounded`, `.ground_normal`, `Landed.surface`) |
+| what happened | the step | – | `events` → `StepEvents` → Report (facts, `Locomotion`, `KinematicContacts`) |
+| `dt` | `Time<Fixed>` | `dt` | – |
 
-"Grounded" in steps 1–4 means `sensed.ground.is_some()`.
+#### 1.7.2 The Part 1 step
 
-Note that **`Ground` ↔ `Air` is settled by the step itself, not by `Transition`.** Whether the
-character ends the tick on the ground is only known after it has moved, and the next tick's `Sense`
-re-measures it anyway. `Transition` only handles the special modes of Part 4.
+Every helper it calls is a public library step in `krit_movement::kcc` (§11, tier 1) with the same
+shape: plain values in, a new value out.
+
+```rust
+pub fn step(world: &dyn CollisionQuery, tuning: &Tuning, command: &MoveCommand,
+            request: Option<&ModeEntry>, sensed: &Surroundings, prev: &MotionState,
+            dt: f32) -> StepResult {
+    let Tuning { profile, stats, hull } = *tuning;
+    let mut events = StepEvents::default();
+
+    // 0. Enter the mode Transition requested (§4.2). In Part 1 there is never a request.
+    let mut current = prev.clone();
+    if let Some(entry) = request {
+        current.mode = entry.mode;
+        // Part 4: current.kinematic.mode_data = entry.data.clone();
+    }
+
+    // Stuck (§1.6): keep the velocity, don't move. Same exit as §4.3's "end of tick".
+    if sensed.stuck {
+        events.ground = sensed.ground.clone();
+        events.mode_changed = ModeChange::between(prev.mode, current.mode);
+        return StepResult { state: current, events };
+    }
+
+    // "Grounded" for steps 1–4 is the ground measured at the start of the tick.
+    let start_ground = sensed.ground.as_ref();
+    let gravity = profile.gravity * stats.gravity_scale;
+    let wish_speed = command.wish_amount * stats.walk_speed;
+    let mut velocity = current.kinematic.velocity;
+
+    // 1. Friction (§1.7.5). Arcade has its own deceleration instead.
+    if let Some(ground) = start_ground
+        && profile.accel_model != AccelModel::Arcade
+    {
+        velocity = kcc::friction(velocity, ground, profile, dt);
+    }
+
+    // 2. Accelerate (§1.7.6) toward wish_dir × wish_speed.
+    let params = AccelParams::new(profile, stats, wish_speed, start_ground.is_some());
+    velocity = kcc::accelerate(profile.accel_model, velocity, command.wish_dir, wish_speed, &params, dt);
+
+    // 3. First half of gravity.
+    if start_ground.is_none() {
+        velocity.y -= gravity * dt * 0.5;
+    }
+    // Impact speed for a landing, taken before the move: the slide clips v.y against the floor.
+    let fall_speed = -velocity.y;
+
+    // 4. Move (§1.7.7, §1.7.8).
+    let moved = match start_ground {
+        Some(ground) => {
+            let stepped = kcc::step_move(world, hull, profile, current.pose.position, velocity, dt, ground);
+            kcc::snap_down(world, hull, profile, stepped)
+        }
+        None => kcc::slide(world, hull, profile, current.pose.position, velocity, dt, &[]),
+    };
+    let mut velocity = moved.velocity;
+
+    // 5. Probe the ground again from where the move ended (same probe as Sense, §1.6).
+    let end_ground = kcc::ground_probe(world, hull, profile, moved.position, velocity);
+
+    // 6. Second half of gravity, or keep the velocity on the ground plane.
+    match &end_ground {
+        None => velocity.y -= gravity * dt * 0.5,
+        Some(ground) => velocity = kcc::clip_velocity(velocity, ground.normal, 1.0),
+    }
+
+    // 7. Settle the mode, record a landing and any mode change since the start of the tick.
+    let mode = if end_ground.is_some() { MovementState::Ground } else { MovementState::Air };
+    if current.mode == MovementState::Air && mode == MovementState::Ground {
+        events.landed = Some(fall_speed);
+    }
+    events.mode_changed = ModeChange::between(prev.mode, mode);   // Part 3: same for stance
+
+    events.step_height = moved.step_height;
+    events.contacts = moved.contacts;
+    events.ground = end_ground.clone();
+
+    StepResult {
+        state: MotionState {
+            pose: BodyPose { position: moved.position },
+            kinematic: KinematicState {
+                velocity,
+                ground: end_ground.map(|ground| ground.entity),
+                ..current.kinematic        // later parts' timers, advanced at the end of the step
+            },
+            mode,
+        },
+        events,
+    }
+}
+
+impl ModeChange {
+    /// `Some` only if the mode actually changed, so Report emits at most one fact per tick.
+    pub fn between(from: MovementState, to: MovementState) -> Option<Self> {
+        (from != to).then_some(Self { from, to })
+    }
+}
+```
+
+Because the change is measured from `prev` to the final state, intermediate values never leak out.
+Leaving a ladder, Transition requests `Air`; if the walk physics then settles on `Ground`, Report sees
+one `Ladder → Ground` change, not `Ladder → Air` followed by `Air → Ground`.
+
+**`Ground` ↔ `Air` is settled by the step itself, not by `Transition`.** Whether the character ends
+the tick on the ground is only known after it has moved, and the next tick's `Sense` re-measures it
+anyway. `Transition` only handles the special modes of Part 4.
 
 **Why gravity is split in two.** Over one tick the body moves `(v − g·dt/2)·dt`, which is the exact
 displacement for constant gravity. A fall therefore follows the analytic parabola at any tick rate,
 and Part 2's jump apex is `v₀²/2g` to within one tick's sampling error (≤ `g·dt²/8`).
 
-#### 1.7.1 Wish direction (in `Prepare`)
+#### 1.7.3 Who calls the step
 
+`sense` and `step` are both pure, so every caller is a short loop around them. The `Sense` stage
+(§1.6) is a thin system around `kcc::sense`:
+
+```rust
+/// §1.6 steps 2–5 as a function: ride, depenetrate, probe, contents.
+pub fn sense(world: &dyn CollisionQuery, tuning: &Tuning, position: Vec3,
+             kinematic: &KinematicState) -> (BodyPose, Surroundings);
 ```
-yaw     = ViewAngles.yaw as radians
-forward = (−sin yaw, 0, −cos yaw)
-right   = ( cos yaw, 0, −sin yaw)
-wish    = right·move_axis.x + forward·move_axis.y          // move_axis.y > 0 is forward
-wish_dir    = normalize_or_zero(wish)
-wish_amount = min(|move_axis|, 1)
+
+**The live tick.** The `MovementSystems::Step` system gathers the components, calls `step` once per
+character, and writes the result back. Apply and Report then read those components.
+
+```rust
+fn step_characters<B: PhysicsBackend>(
+    world: B::Query,
+    time: Res<Time<Fixed>>,
+    profiles: Res<Assets<MovementProfile>>,
+    mut characters: Query<(
+        Entity,
+        &CharacterController, &MovementProfileHandle, &MovementStats, &CharacterHull, // Tuning
+        &MoveCommand, &mut ModeRequest, &Surroundings,                 // this tick's inputs
+        &mut BodyPose, &mut KinematicState, &mut MovementState,        // MotionState, in and out
+        &mut StepEvents,                                               // out
+    )>,
+) {
+    let dt = time.delta_secs();
+    for (entity, controller, handle, stats, hull, command, mut request, sensed,
+         mut pose, mut kinematic, mut mode, mut events) in &mut characters {
+        let profile = controller.profile_override.as_ref().unwrap_or_else(|| &profiles[&handle.0]);
+        let tuning = Tuning { profile, stats, hull };
+        let prev = MotionState { pose: pose.clone(), kinematic: kinematic.clone(), mode: *mode };
+        let request = request.0.take();      // consumed here, so a request never leaks into the next tick
+
+        let result = step(&world.for_character(entity), &tuning, command, request.as_ref(),
+                          sensed, &prev, dt);
+
+        *pose = result.state.pose;           // → Apply → backend Position
+        *kinematic = result.state.kinematic; // → next tick; Apply → backend LinearVelocity
+        *mode = result.state.mode;           // → Report, next tick's Transition
+        *events = result.events;             // → Report
+    }
+}
+```
+
+The same `MotionState` value is what a rollback snapshot holds. With full-schedule rollback
+(arch §4.2), the network layer restores these components and re-runs the schedule; this system
+runs again unchanged.
+
+**Resimulating one character** (client reconciliation without re-running the schedule, a server
+stepping a bot ahead, a golden-trajectory test). `Sense` runs inside the loop, because each tick
+starts from the position the previous tick produced:
+
+```rust
+let mut state = snapshot.clone();                       // MotionState at the snapshot tick
+for command in &commands_since_snapshot {               // MoveCommand per tick
+    let (pose, sensed) = kcc::sense(world, &tuning, state.pose.position, &state.kinematic);
+    state.pose = pose;
+    let request = kcc::transition(world, &tuning, command, &sensed, &state);   // built-in rules, §4.2
+    state = step(world, &tuning, command, request.as_ref(), &sensed, &state, dt).state;
+}
+// `state` is the corrected present; write it to the components once.
+```
+
+`kcc::transition` covers the built-in transitions only. A game with its own transition systems
+(§11, tier 2) either resimulates through the schedule or calls its own rules in the same place.
+
+`world` answers with colliders where they are *now*, not where they were on the replayed tick.
+Static geometry doesn't care. Remote characters are interpolated in the past anyway and the server
+corrects any difference. Moving platforms (Part 5) avoid the problem by placing themselves as a pure
+function of the tick, so a resim can ask where a platform was on any replayed tick.
+
+#### 1.7.4 Wish direction (in `Prepare`)
+
+`CharacterIntent.move_axis` is the character's local X/Z plane: `x` is right, `y` is local Z, so
+**forward is −y**, matching Bevy's −Z forward. `krit_input` flips the binding's y to produce this;
+bots and replays writing `CharacterIntent` directly use the same convention.
+
+```rust
+fn prepare_command(intent: &CharacterIntent, view: &ViewAngles, gates: &ActionGates) -> MoveCommand {
+    let local = Vec3::new(intent.move_axis.x, 0.0, intent.move_axis.y);
+    MoveCommand {
+        // rotate_y(yaw) turns local −Z into (−sin yaw, 0, −cos yaw)
+        wish_dir: local.normalize_or_zero().rotate_y(view.yaw_rads()),
+        wish_amount: if gates.contains(ActionGates::MOVE) {
+            0.0
+        } else {
+            intent.move_axis.length().min(1.0)
+        },
+        // … held, pressed, look_dir, velocity_override (§1.4)
+    }
+}
 ```
 
 Pitch does not affect ground or air movement. Analogue sticks give slower walking for free because
-`wish_amount` scales the target speed. If the `MOVE` gate is set, `wish_amount` is 0; gravity,
-friction and sliding still run.
+`wish_amount` scales the target speed. With the `MOVE` gate set, gravity, friction and sliding still
+run. `normalize_or_zero` matters: with no input, `normalize` would return NaN and poison the velocity
+on every later tick.
 
-#### 1.7.2 Friction
+#### 1.7.5 Friction
 
-Quake/Source ground friction, applied to horizontal speed only:
+Quake/Source ground friction, on horizontal speed only:
 
+```rust
+pub fn friction(velocity: Vec3, ground: &GroundHit, profile: &MovementProfile, dt: f32) -> Vec3 {
+    let speed = velocity.xz().length();
+    if speed <= f32::EPSILON {
+        return Vec3::new(0.0, velocity.y, 0.0);
+    }
+    let control = speed.max(profile.stop_speed);           // so slow movement stops in finite time
+    let drop = control * profile.friction * ground.surface.friction * dt;
+    let scale = (speed - drop).max(0.0) / speed;
+    Vec3::new(velocity.x * scale, velocity.y, velocity.z * scale)
+}
 ```
-speed   = |v.xz|
-control = max(speed, stop_speed)                  // so slow movement stops in finite time
-drop    = control × friction × surface.friction × dt
-v.xz   *= max(speed − drop, 0) / speed
+
+`ground.surface.friction` is the ground's `SurfaceInfo` multiplier (1.0 by default; ice is lower).
+
+#### 1.7.6 Acceleration models
+
+`profile.accel_model` selects one of three. The step picks the rate and cap for ground or air, so
+the models themselves don't know which they are in:
+
+```rust
+pub struct AccelParams {
+    pub accel: f32,       // stats.ground_accel or stats.air_accel (Arcade air: ground_accel × air_control)
+    pub decel: f32,       // Arcade only: profile.decel, default accel (× air_control in the air)
+    pub cap: Option<f32>, // ground: Some(wish_speed); air: profile.air_wishspeed_cap
+}
+
+impl AccelParams {
+    pub fn new(profile: &MovementProfile, stats: &MovementStats, wish_speed: f32, grounded: bool) -> Self {
+        match (grounded, profile.accel_model) {
+            (true, _) => Self {
+                accel: stats.ground_accel,
+                decel: profile.decel.unwrap_or(stats.ground_accel),
+                cap: Some(wish_speed),
+            },
+            (false, AccelModel::Arcade) => {
+                let air_control = profile.air_control.unwrap_or(1.0);
+                Self {
+                    accel: stats.ground_accel * air_control,
+                    decel: profile.decel.unwrap_or(stats.ground_accel) * air_control,
+                    cap: None,
+                }
+            }
+            (false, _) => Self { accel: stats.air_accel, decel: 0.0, cap: profile.air_wishspeed_cap },
+        }
+    }
+}
+
+pub fn accelerate(model: AccelModel, velocity: Vec3, wish_dir: Vec3, wish_speed: f32,
+                  params: &AccelParams, dt: f32) -> Vec3 {
+    match model {
+        AccelModel::QuakeProjection => { /* below */ }
+        AccelModel::Proper => { /* below */ }
+        AccelModel::Arcade => { /* below */ }
+    }
+}
 ```
-
-`surface.friction` is the ground's `SurfaceInfo` multiplier (1.0 by default; ice is lower).
-
-#### 1.7.3 Acceleration models
-
-`MovementProfile::accel_model` selects one of three. Each takes
-`(v, wish_dir, wishspeed, accel, cap)`, where `wishspeed = wish_amount × state speed`. On the ground
-the cap is `wishspeed`; in the air it is `air_wishspeed_cap` (or none).
 
 **`QuakeProjection`** (QuakeWorld, Quake 3, Source). Air-strafing and bunny-hop gain come from this:
 
-```
-current   = dot(v, wish_dir)
-add       = min(wishspeed, cap) − current          // capped speed in the projection test …
-if add <= 0 { return }
-accel_amt = min(accel × wishspeed × dt, add)       // … uncapped wishspeed in the step
-v        += wish_dir × accel_amt
+```rust
+let current = velocity.dot(wish_dir);
+let capped = params.cap.map_or(wish_speed, |cap| wish_speed.min(cap)); // capped in the test …
+let add = capped - current;
+if add <= 0.0 {
+    return velocity;
+}
+let amount = (params.accel * wish_speed * dt).min(add);                // … uncapped in the rate
+velocity + wish_dir * amount
 ```
 
-Turning so that `wish_dir` stays nearly perpendicular to `v` keeps `current` small, so `add` stays
-positive while total speed grows. With no cap (Quake 3), gain relies on a low `air_accel` instead.
+Turning so that `wish_dir` stays nearly perpendicular to `velocity` keeps `current` small, so `add`
+stays positive while total speed grows. With no cap (Quake 3), gain relies on a low `air_accel`
+instead.
 
 **`Proper`** (Carmack's `#else` branch in Q3 `PM_Accelerate`: "avoids strafe jump maxspeed bug, but
 feels bad"). Accelerates the velocity *vector* toward the target, so strafing never exceeds
-`wishspeed`:
+`wish_speed`:
 
-```
-push      = wish_dir × wishspeed − v.xz
-can_push  = accel × wishspeed × dt
-v.xz     += push.clamp_length_max(can_push)
-```
-
-**`Arcade`**. Moves horizontal velocity toward the target at a fixed rate, with separate rates for
-speeding up and stopping (`accel`, `decel`), no friction pass, and air control scaled by
-`air_control`. This is the feel of most modern console shooters and of the Bevy `fps_controller`.
-
-#### 1.7.4 Collide-and-slide
-
-`slide(pose, v, dt, extra_planes)` is the `TryPlayerMove` / `PM_SlideMove` loop:
-
-```
-time_left = dt;  planes = extra_planes (the ground plane, if grounded)
-for bump in 0..MAX_BUMPS (4):
-    hit = world.cast_shape(hull, pose, v × time_left, filter)
-    if hit.start_solid { v = 0; return Stuck }
-    pose += v × time_left × hit.fraction, backed off by skin_width along the motion
-    if no hit { break }
-    time_left −= time_left × hit.fraction
-    if planes.len() == MAX_CLIP_PLANES (5) { v = 0; break }
-    planes.push(hit.normal)
-    // find a velocity that slides along every touched plane
-    for each plane i:
-        clipped = clip(v, plane_i, overbounce)
-        if clipped points into some other plane j:
-            clipped = clip(clipped, plane_j, overbounce)
-            if it still points into plane i: slide along the crease, dir = cross(n_i, n_j)
-            if a third plane blocks too: v = 0, stop
-    if dot(v, original_v) <= 0 { v = 0; break }      // never move backwards (Q3)
-clip(v, n, overbounce) = v − n × dot(v, n) × overbounce   (only when dot(v, n) < 0)
+```rust
+let horizontal = velocity.with_y(0.0);
+let push = wish_dir * wish_speed - horizontal;
+velocity + push.clamp_length_max(params.accel * wish_speed * dt)
 ```
 
-`overbounce` is 1.0 (Source) or 1.001 (Quake 3's `OVERCLIP`); the tiny extra stops the character
-grinding along a wall it is pressed into. Every hit is pushed onto `events.contacts`.
+**`Arcade`**. Moves horizontal velocity toward the target at a fixed rate in m/s², speeding up at
+`accel` and stopping at `decel`. The step skips friction for it. This is the feel of most modern
+console shooters and of the Bevy `fps_controller`.
 
-#### 1.7.5 Step-up and ground snap
+```rust
+let target = wish_dir * wish_speed;
+let rate = if wish_speed > 0.0 { params.accel } else { params.decel };
+let horizontal = velocity.with_y(0.0).move_towards(target, rate * dt);
+Vec3::new(horizontal.x, velocity.y, horizontal.z)
+```
 
-`step_move` is Source's `StepMove`, the variant bevy_ahoy also uses:
+#### 1.7.7 Collide-and-slide
 
-1. Save the start. Run `slide` flat; remember where it ended (`flat`).
-2. From the start: cast up by `step_height`; from there `slide` horizontally; cast down by
-   `step_height` (plus the probe distance).
-3. Reject the stepped result if it landed on a non-walkable normal, on a `NO_STEP` surface, or with
-   less than `min_step_ledge_space` of floor ahead (a ledge too thin to stand on).
-4. `step_rule` decides:
-   - `FartherHorizontal` (Source): keep whichever of `flat` and stepped went farther in XZ;
-   - `WhenBlocked` (Quake 3): only try the stepped move if the flat move hit something.
-5. If the stepped result wins, record `events.step_height = stepped.y − start.y`.
+`slide` is the `TryPlayerMove` / `PM_SlideMove` loop. It returns where the hull ended up, the
+velocity left after clipping, and every surface it touched:
 
-`snap_down` is Source's `StayOnGround`: if the character was grounded at the start of the tick and
-is not grounded after the move, cast down by `ground_snap_distance` (default: `step_height`). If that
-hits walkable ground, move down onto it and record a negative `events.step_height`. That keeps the
-character on stairs and downward slopes instead of skipping off them.
+```rust
+pub struct MoveResult {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub step_height: f32,                    // + from step_move, − from snap_down, else 0
+    pub contacts: SmallVec<[Contact; 8]>,    // → events.contacts → KinematicContacts, CharacterPush
+}
+
+const MAX_BUMPS: usize = 4;
+const MAX_CLIP_PLANES: usize = 5;
+
+pub fn slide(world: &dyn CollisionQuery, hull: &CharacterHull, profile: &MovementProfile,
+             from: Vec3, velocity: Vec3, dt: f32, extra_planes: &[Dir3]) -> MoveResult {
+    let original = velocity;
+    let mut result = MoveResult { position: from, velocity, step_height: 0.0, contacts: default() };
+    let mut planes: SmallVec<[Dir3; MAX_CLIP_PLANES]> = extra_planes.into(); // ground plane, if grounded
+    let mut time_left = dt;
+
+    for _ in 0..MAX_BUMPS {
+        let motion = result.velocity * time_left;
+        let trace = world.cast_shape(hull, result.position, motion);
+        if trace.start_solid {
+            result.velocity = Vec3::ZERO;
+            return result;
+        }
+        // Advance to the hit, backed off by skin_width along the motion (never past the start).
+        result.position += motion * trace.fraction_with_skin(hull.skin_width);
+        if trace.fraction >= 1.0 {
+            break;
+        }
+        result.contacts.push(Contact {
+            entity: trace.entity,
+            normal: trace.normal,
+            speed: -result.velocity.dot(*trace.normal),
+        });
+        time_left -= time_left * trace.fraction;
+        if planes.len() == MAX_CLIP_PLANES {
+            result.velocity = Vec3::ZERO;
+            break;
+        }
+        planes.push(trace.normal);
+        result.velocity = clip_to_planes(result.velocity, &planes, profile.overbounce);
+        if result.velocity.dot(original) <= 0.0 {   // never move backwards (Q3)
+            result.velocity = Vec3::ZERO;
+            break;
+        }
+    }
+    result
+}
+
+/// A velocity that slides along every touched plane, or zero in a corner.
+fn clip_to_planes(velocity: Vec3, planes: &[Dir3], overbounce: f32) -> Vec3 {
+    for (i, n_i) in planes.iter().enumerate() {
+        if velocity.dot(**n_i) >= 0.0 {
+            continue;                                // not moving into this plane
+        }
+        let mut clipped = clip_velocity(velocity, *n_i, overbounce);
+        for (j, n_j) in planes.iter().enumerate() {
+            if j == i || clipped.dot(**n_j) >= 0.0 {
+                continue;
+            }
+            clipped = clip_velocity(clipped, *n_j, overbounce);
+            if clipped.dot(**n_i) >= 0.0 {
+                continue;
+            }
+            // Pressed into both: slide along the crease between them.
+            let crease = n_i.cross(**n_j).normalize_or_zero();
+            clipped = crease * crease.dot(velocity);
+            let third_blocks = planes.iter().enumerate()
+                .any(|(k, n_k)| k != i && k != j && clipped.dot(**n_k) < 0.0);
+            if third_blocks {
+                return Vec3::ZERO;                   // a corner: stop
+            }
+        }
+        return clipped;
+    }
+    velocity
+}
+
+pub fn clip_velocity(velocity: Vec3, normal: Dir3, overbounce: f32) -> Vec3 {
+    let into = velocity.dot(*normal);
+    if into >= 0.0 { velocity } else { velocity - *normal * into * overbounce }
+}
+```
+
+`profile.overbounce` is 1.0 (Source) or 1.001 (Quake 3's `OVERCLIP`); the tiny extra stops the
+character grinding along a wall it is pressed into.
+
+#### 1.7.8 Step-up and ground snap
+
+`step_move` is Source's `StepMove`, the variant bevy_ahoy also uses. It tries the move flat and
+raised by `step_height`, and keeps one:
+
+```rust
+pub fn step_move(world: &dyn CollisionQuery, hull: &CharacterHull, profile: &MovementProfile,
+                 from: Vec3, velocity: Vec3, dt: f32, ground: &GroundHit) -> MoveResult {
+    let flat = kcc::slide(world, hull, profile, from, velocity, dt, &[ground.normal]);
+    if profile.step_rule == StepRule::WhenBlocked && flat.contacts.is_empty() {
+        return flat;                                 // Quake 3: only step when the flat move hit something
+    }
+
+    // Up by step_height, across, then back down by as much plus the probe distance.
+    let up = world.cast_shape(hull, from, Vec3::Y * profile.step_height);
+    let raised = from + Vec3::Y * profile.step_height * up.fraction;
+    let across = kcc::slide(world, hull, profile, raised, velocity, dt, &[]);
+    let drop = (raised.y - from.y) + profile.ground_probe_distance;
+    let down = world.cast_shape(hull, across.position, Vec3::NEG_Y * drop);
+    let landed = across.position - Vec3::Y * drop * down.fraction;
+
+    let rejected = down.fraction >= 1.0                              // nothing to stand on
+        || down.normal.y < profile.max_walk_slope_cos                // too steep
+        || world.surface(down.entity).flags.contains(SurfaceFlags::NO_STEP)
+        || profile.min_step_ledge_space   // None: any ledge will do (Quake, Source)
+            .is_some_and(|space| !kcc::has_ledge_space(world, hull, landed, velocity, space));
+    if rejected {
+        return flat;
+    }
+
+    let stepped = MoveResult { position: landed, step_height: landed.y - from.y, ..across };
+    let went = |r: &MoveResult| r.position.xz().distance_squared(from.xz());
+    if profile.step_rule == StepRule::FartherHorizontal && went(&flat) >= went(&stepped) {
+        return flat;                                 // Source: keep whichever went farther in XZ
+    }
+    stepped
+}
+```
+
+`snap_down` is Source's `StayOnGround`. The step only calls it when the character was grounded at
+the start of the tick. If the move left it in the air, it casts down by `ground_snap_distance`
+(default: `step_height`) and, on walkable ground, moves down onto it. That keeps the character on
+stairs and downward slopes instead of skipping off them:
+
+```rust
+pub fn snap_down(world: &dyn CollisionQuery, hull: &CharacterHull, profile: &MovementProfile,
+                 moved: MoveResult) -> MoveResult {
+    if kcc::ground_probe(world, hull, profile, moved.position, moved.velocity).is_some() {
+        return moved;                                // still on the ground
+    }
+    let trace = world.cast_shape(hull, moved.position, Vec3::NEG_Y * profile.ground_snap_distance);
+    if trace.fraction >= 1.0 || trace.normal.y < profile.max_walk_slope_cos {
+        return moved;                                // a real ledge: let it fall
+    }
+    let drop = profile.ground_snap_distance * trace.fraction;
+    MoveResult {
+        position: moved.position - Vec3::Y * drop,
+        step_height: moved.step_height - drop,       // negative: camera smooths the drop
+        ..moved
+    }
+}
+```
 
 Step-up only runs while grounded, unless the profile sets `step_in_air` (arcade feel; off in all
 lineage presets).
@@ -553,8 +965,8 @@ lineage presets).
 - `EyeHeight = standing_height − eye_below_top` (Part 3 makes it follow stance);
 - `MovementSpreadFactor`;
 - `KinematicContacts` from `events.contacts`;
-- facts: `Landed` (fall speed from `events.landed`, surface from `Surroundings.ground`; full shape in
-  §9.2), and `MovementStateChanged` if the final mode differs from `events.start_mode`.
+- facts: `Landed` (fall speed from `events.landed`, surface from `events.ground`; full shape in
+  §9.2), and `MovementStateChanged` from `events.mode_changed`.
 
 That completes Part 1: the character walks, climbs steps, slides along walls, stays glued to stairs
 and falls off ledges.
@@ -697,7 +1109,7 @@ pub struct KinematicState {
 }
 ```
 
-`Stance` itself is motion state (rolled back) and joins `Motion`. It lives in `krit_core` because
+`Stance` itself is motion state (rolled back) and joins `MotionState`. It lives in `krit_core` because
 `krit_kamera`, `krit_weapons` and hurtbox poses read it and may only depend on core.
 
 ### 3.3 Where stance goes in the step
@@ -727,7 +1139,7 @@ this tick's stance and hull (Source runs `Duck()` before `FullWalkMove` for the 
   transition, and forbids jumping. A prone hull is still upright (a short cylinder); a lying-down
   hull that rotates with yaw is left to a custom state (§13).
 - A completed stance change is recorded so `Report` emits `StanceChanged` (comparing with
-  `events.start_stance`).
+  `prev.stance`; recorded in `events.stance_changed`).
 
 ### 3.5 Eye height and the hull in Apply
 
@@ -762,7 +1174,7 @@ rules ("firing cancels sprint") live in `ActionRules` (arch §5.6), not here.
 
 **`Stamina`** (`MovementStamina` plugin) is motion state: `{ current, regen_delay_ticks }`. The step
 drains it while sprinting and on jumps, and regenerates it after `stamina_regen_delay`. Without the
-plugin, `Motion.stamina` is `None` and sprint is unlimited.
+plugin, `MotionState.stamina` is `None` and sprint is unlimited.
 
 ### 4.2 Modes and the Transition stage
 
@@ -790,16 +1202,32 @@ pub enum ModeData {
 }
 ```
 
-**`Transition`** decides which mode the step runs in this tick. It reads `Surroundings` and
-`MoveCommand`, and may run its own casts (mantle detection). Built-in transitions run in one system,
-in priority order:
+**`Transition`** decides which mode the step runs in this tick. It reads `Surroundings`,
+`MoveCommand` and the current `MovementState`, and may run its own casts (mantle detection). It
+never writes `MovementState`: it writes a `ModeRequest` (§1.4), with the mode's starting data, and
+the step applies it before anything else (§1.7.2). Built-in transitions run in one system, in
+priority order:
 
 `Attached` > `Noclip` > `Mantle` (in progress) > `Ladder` > `Swim` > `Slide` > walk (`Ground`/`Air`)
 
-Leaving a special mode returns the character to walk physics; the step then settles `Ground` or
-`Air`. Game systems placed `.after(MovementTransitionSystems::Builtin)` in the same set can override
-the result. Mode changes are reported by `Report` from `events.start_mode`, so there is exactly one
-`MovementStateChanged` per tick however many systems touched the mode.
+```rust
+// The built-in rules as a pure function, so a resimulation loop can call them too (§1.7.3).
+pub fn transition(world: &dyn CollisionQuery, tuning: &Tuning, command: &MoveCommand,
+                  sensed: &Surroundings, current: &MotionState) -> Option<ModeEntry>;
+
+// MovementTransitionSystems::Builtin is a thin system around it.
+fn builtin_transitions(world: B::Query, mut q: Query<(…, &mut ModeRequest)>) {
+    for (…, mut request) in &mut q {
+        request.0 = kcc::transition(&world.for_character(entity), &tuning, command, sensed, &current);
+    }
+}
+```
+
+Leaving a special mode requests `Air`; the walk physics then settles `Ground` or `Air`. Game systems
+placed `.after(MovementTransitionSystems::Builtin)` in the same set see the built-in request and can
+replace it or clear it. Whatever request is left when the set ends is the one the step applies, and
+the step records one `events.mode_changed` from the tick's starting mode to its final one, so there
+is exactly one `MovementStateChanged` per tick however many systems weighed in.
 
 | State | Entered when | Physics | Leaves when | Gates | Plugin |
 |---|---|---|---|---|---|
@@ -817,6 +1245,7 @@ the result. Mode changes are reported by `Report` from `events.start_mode`, so t
 With every part in place, the step is:
 
 ```
+−2. apply ModeRequest: mode, mode_data; on entry, e.g. slide_boost (§4.2)
 if sensed.stuck: skip to "end of tick"
 −1. stance                                    (Part 3)
 dispatch on MovementState:
@@ -835,6 +1264,7 @@ end of tick:
   leaving a mover → inherit its velocity      (Part 5)
   advance timers: ticks_since_grounded, jump_buffer, jump_held, friction_lock, stance, mode, stride
   sprint flag, stamina drain/regen
+  record mode_changed / stance_changed from prev to final
 ```
 
 `Report` runs for every mode, including `Custom`, so `Locomotion`, facts and spread keep working.
@@ -880,7 +1310,8 @@ Detection runs in `Transition` only when a jump would otherwise happen (or every
 3. **Clearance:** cast the standing hull (falling back to the crouched hull, which forces
    `Crouched`) at the ledge top. It must fit.
 
-On success the mode becomes `Mantle` and `mode_data` stores `{ start, top, ticks, duration }`. The
+On success, Transition requests `ModeEntry { mode: Mantle, data: ModeData::Mantle { start, top,
+ticks: 0, duration } }`, and the step stores the data in `mode_data` when it applies the request. The
 pose follows a fixed two-segment path (up to the ledge height, then forward onto it) as a function of
 `ticks / duration`, so it is deterministic and rollback-safe without storing anything else.
 Collision is not checked along the path because clearance was checked up front. The mode ends in
@@ -988,13 +1419,14 @@ The stage writes neither `LocalAim` nor `intent.aim`.
 | `BodyPose` | surroundings | movement | Working copy of the body position (§1.4) | `Sense`, `Step` | `Derived` |
 | `Surroundings` | surroundings | movement | Ground, water, ladder, stuck (§1.4) | `Sense` | `Derived` |
 | `KinematicState` | motion | movement | Velocity, ground entity, timers, mode data (§7.1) | `Prepare`, `Sense`, `Step` | `OwnerPredicted` |
-| `MovementState` | motion | **core** | The mode (§4.2) | `Transition`, `Step` | `OwnerPredicted` |
+| `MovementState` | motion | **core** | The mode (§4.2) | `Step` only (Transition writes `ModeRequest`) | `OwnerPredicted` |
 | `Stance` | motion | **core** | `Standing`, `Crouched`, `Prone` (§3) | `Step` | `OwnerPredicted` |
 | `Stamina` | motion | movement | `current`, `regen_delay_ticks` (§4.1) | `Step` | `OwnerPredicted` |
 | `ViewAngles` | motion | core | Actual facing | aim stage only | `OwnerPredicted`, interpolated for others |
 | `ViewAngleOffset` | motion | core | Sim-imposed facing (spawn, teleport, platforms) | any sim system | `OwnerPredicted` |
 | `AimRecoil` | motion | core | Shot-affecting recoil | weapons add, aim stage decays | `OwnerPredicted` |
-| `StepEvents` | result | movement | What happened this tick (§1.4) | `Prepare`, `Transition`, `Step` | `Derived` |
+| `StepEvents` | result | movement | What happened this tick (§1.4) | `Step` (from `StepResult`) | `Derived` |
+| `ModeRequest` | command | movement | Mode (and its data) Transition wants this tick (§1.4) | `Transition`; taken by `Step` | `Derived` |
 | `Locomotion` | result | **core** | Read model for other crates (§9.1) | `Report` | `Derived` |
 | `EyeHeight` | result | core | Eye height above the feet | `Report` | `Derived` |
 | `MovementSpreadFactor` | result | core | 0..1 movement inaccuracy for weapons | `Report` | `Derived` |
@@ -1232,8 +1664,8 @@ Character for game code and presentation, skipped while resimulating (arch §4.1
 |---|---|---|
 | `Jumped { tick }` | `jumped` | kamera, audio, AI |
 | `Landed { tick, fall_speed, surface }` | `landed` | kamera (landing dip above `land_effect_speed`), audio, fall damage |
-| `MovementStateChanged { from, to }` | `start_mode` vs final mode | animation, game code |
-| `StanceChanged { from, to }` | `start_stance` vs final stance | hurtboxes, animation |
+| `MovementStateChanged { from, to }` | `mode_changed` | animation, game code |
+| `StanceChanged { from, to }` | `stance_changed` | hurtboxes, animation |
 | `NoiseEvent` | `jumped`, `landed`, `footstep` | AI, stealth |
 | `CharacterPush` | `contacts` with dynamic bodies | backend |
 | `DamageRequest` (fall) | `landed` | damage |
@@ -1275,14 +1707,16 @@ Following the Unity Character Controller split ([`research/unity-dots-online-fps
 `krit_movement::kcc`, takes plain data and `&dyn CollisionQuery`, and has no ECS access:
 
 ```rust
-pub fn depenetrate(world, hull, pose) -> DepenetrationResult;
-pub fn ground_probe(world, hull, pose, v, cfg: &GroundConfig) -> Option<GroundHit>;
-pub fn friction(v: Vec3, surface: &SurfaceInfo, p: &FrictionParams, dt) -> Vec3;
-pub fn accelerate(v, wish_dir, wishspeed, accel, cap: Option<f32>, model, dt) -> Vec3;
-pub fn slide(world, hull, pose: &mut Vec3, v: &mut Vec3, dt, planes: &[Dir3], cfg) -> SlideResult;
-pub fn step_up(world, hull, pose: &mut Vec3, v: &mut Vec3, dt, cfg) -> StepResult;
-pub fn snap_down(world, hull, pose: &mut Vec3, cfg) -> Option<f32>;
-pub fn wish(move_axis: Vec2, yaw: u32) -> (Vec3, f32);   // (wish_dir, wish_amount); yaw is the raw u32, converted to radians inside (§1.7.1)
+pub fn sense(world, tuning, position: Vec3, kinematic: &KinematicState) -> (BodyPose, Surroundings);  // §1.7.3
+pub fn depenetrate(world, hull, position: Vec3, profile) -> Depenetration;     // { position, stuck }
+pub fn ground_probe(world, hull, profile, position: Vec3, velocity: Vec3) -> Option<GroundHit>;
+pub fn friction(velocity: Vec3, ground: &GroundHit, profile, dt) -> Vec3;      // §1.7.5
+pub fn accelerate(model, velocity, wish_dir, wish_speed, params: &AccelParams, dt) -> Vec3;  // §1.7.6
+pub fn slide(world, hull, profile, from: Vec3, velocity: Vec3, dt, extra_planes: &[Dir3]) -> MoveResult;  // §1.7.7
+pub fn clip_velocity(velocity: Vec3, normal: Dir3, overbounce: f32) -> Vec3;
+pub fn step_move(world, hull, profile, from: Vec3, velocity: Vec3, dt, ground: &GroundHit) -> MoveResult;  // §1.7.8
+pub fn snap_down(world, hull, profile, moved: MoveResult) -> MoveResult;
+pub fn wish(move_axis: Vec2, yaw: u32) -> (Vec3, f32);   // (wish_dir, wish_amount); yaw is the raw u32, converted to radians inside (§1.7.4)
 ```
 
 A game writing its own controller (a hover vehicle, a wall-runner) calls these and gets the same
@@ -1294,19 +1728,25 @@ collision behaviour as the built-in one.
 const WALL_RUN: CustomMovementId = CustomMovementId(1);
 
 // MovementSystems::Transition, after the built-in transitions
-fn enter_wall_run(mut q: Query<(&mut MovementState, &Surroundings, &KinematicContacts, &MoveCommand)>) {
-    for (mut mode, sensed, contacts, command) in &mut q {
-        if *mode == MovementState::Air && /* touching a wall, holding forward */ {
-            *mode = MovementState::Custom(WALL_RUN);
+fn enter_wall_run(mut q: Query<(&MovementState, &mut ModeRequest, &Surroundings, &KinematicContacts, &MoveCommand)>) {
+    for (mode, mut request, sensed, contacts, command) in &mut q {
+        let built_in_wants_something = request.0.is_some();
+        if *mode == MovementState::Air && !built_in_wants_something && /* touching a wall, holding forward */ {
+            request.0 = Some(ModeEntry { mode: MovementState::Custom(WALL_RUN), data: ModeData::None });
         }
     }
 }
 
-// MovementSystems::Step; the built-in step skips characters in Custom modes
-fn wall_run_step(world: CollisionParam<B>, mut q: Query<(&mut BodyPose, &mut KinematicState, &mut StepEvents, &mut WallRunState, …)>) {
-    // use kcc::slide, kcc::ground_probe … and update BodyPose and velocity
+// MovementSystems::Step, after the built-in step. The built-in step applies the request, records
+// the mode change, and does not move characters in Custom modes.
+fn wall_run_step(world: CollisionParam<B>, mut q: Query<(&MovementState, &mut BodyPose, &mut KinematicState, &mut StepEvents, &mut WallRunState, …)>) {
+    // use kcc::slide, kcc::ground_probe … and update BodyPose, velocity and StepEvents
+    // (add to StepEvents rather than replacing it, so the recorded mode change survives)
 }
 ```
+
+Leaving the custom mode works the same way: the game's Transition system requests `Air` (or another
+mode), and the built-in step takes over on that tick.
 
 A custom mode's data lives in the game's own components (`WallRunState`), tagged
 `#[reflect(SimState)]`, so it rolls back with everything else. This is why the extension point is "a
@@ -1331,7 +1771,7 @@ sent): this is the §0.2 split, made concrete.
 
 | Rolled back | Recomputed every tick |
 |---|---|
-| backend body position (avian `Position`) | `BodyPose`, `Surroundings`, `MoveCommand`, `StepEvents` |
+| backend body position (avian `Position`) | `BodyPose`, `Surroundings`, `MoveCommand`, `ModeRequest`, `StepEvents` |
 | `KinematicState` | ground normal, water level, ladder contact |
 | `MovementState`, `Stance`, `Stamina` | `EyeHeight`, `Locomotion`, `MovementSpreadFactor`, `KinematicContacts` |
 | `ViewAngles`, `ViewAngleOffset`, `AimRecoil` | `MovementStats` (recomputed from modifiers) |
@@ -1395,9 +1835,9 @@ This is what was decided, and the summary and architecture now follow it.
 | `MovementState`, `Stance`, `Locomotion` | owned by movement | in `krit_core` | kamera, weapons and feedback read them and may only depend on core |
 | `KinematicState` contents | velocity, `grounded`, ground normal, `last_step_height`, coyote timer | velocity, ground entity, tick timers, mode data (§7.1) | Only motion state is rolled back (§0.2); ground facts are re-measured, `last_step_height` is a per-tick result |
 | Ground detection timing | inside the step, after `Transition` had already used it | in `Sense`, before `Transition`; re-probed inside the step after the move (§1.6) | Transitions need this tick's ground and water |
-| Who sets `Ground`/`Air` | `Transition` | the step, at the end of the move (§1.7) | Only known after moving |
-| Step outputs | `MoveOutput` component *and* `StepReport` return value *and* `(state, MoveOutput)` | step updates `BodyPose` and the motion state in place, and records `StepEvents` (§1.4) | One working copy, one event record; nothing duplicated |
-| Step signature | `step(state, intent, stats, &impl CollisionQuery, dt)` / `step(ctx: &StepContext, …)` | `step(world, tuning, command, sensed, motion, events, dt)` (§1.7) | Each argument is one kind of data from §0.2 |
+| Who sets `MovementState` | `Transition` | only the step: it settles `Ground`/`Air` after the move and applies Transition's `ModeRequest` (§1.7, §4.2) | `Ground`/`Air` is only known after moving; one writer means the step sees the tick's starting mode and records the change itself (no `TickStart`-style snapshot) |
+| Step outputs | `MoveOutput` component *and* `StepReport` return value *and* `(state, MoveOutput)` | step returns `StepResult { state: MotionState, events: StepEvents }`; the caller writes it to components or feeds it back in (§1.7) | One transition function serves the live tick, resimulation, bots and tests |
+| Step signature | `step(state, intent, stats, &impl CollisionQuery, dt)` / `step(ctx: &StepContext, …)` / `step(…, motion: &mut Motion, events: &mut StepEvents, …)` | `step(world, tuning, command, request, sensed, prev: &MotionState, dt) -> StepResult` (§1.7.1) | Each argument is one kind of data from §0.2; nothing is mutated in place |
 | Profile → ticks | a per-tick `Prepare` job *and* a once-on-load conversion | converted where used, `ticks(seconds, dt)` (§2.1) | No cached derived profile to keep in sync |
 | Stance progress | `stance_progress: u16` documented as "0 to 1" | `stance_ticks: u16`, a tick count (§3.2) | An integer cannot hold a 0..1 fraction |
 | `jump_mode` | `RequireRelease \| AutoHop \| Buffered` | adds `PressEdge` (Source) | Differs from `RequireRelease` when jump is held through a landing |
@@ -1420,9 +1860,9 @@ The code in `crates/krit_movement` is an early prototype. Where it differs from 
 | `KritMovement` adds `KritAimPlugin` and `KritMovementPlugin` | `MovementPlugins<B>` with the plugins in §10 |
 | `MovementSystems::{Prepare, Sense, Transition, Step, Apply, Report}` | same; matches |
 | `AimSystems::{Ride, Compose, Recoil}` | same; matches |
-| `StepContext { intent, transform }`, `StepReport { transform }` | `MoveCommand` + `Surroundings` + `Tuning` in, `Motion` + `StepEvents` out (§1.4, §1.7) |
+| `StepContext { intent, transform }`, `StepReport { transform }` | `Tuning` + `MoveCommand` + `ModeRequest` + `Surroundings` + `MotionState` in, `StepResult` out (§1.7.1) |
 | `handle_movement` writes `Transform` directly | `Apply` writes the backend body; `Transform` is presentation |
-| `step` adds `move_axis` as `(x, 0, y)` with no yaw, speed or `dt` | wish from `move_axis` and yaw (§1.7.1); `move_axis.y > 0` is forward (−Z), so the current mapping moves backwards |
+| `step` adds `move_axis` as `(x, 0, y)` with no yaw, speed or `dt` | wish from `move_axis` and yaw (§1.7.4); matches (`normalize_or_zero`, forward is −y) |
 | `KinematicState { velocity, grounded, ground_normal: Vec2, last_step_height }` | §7.1 (and a ground normal would be a `Dir3`, not a `Vec2`) |
 | `MovementState::{Ground, Air, Crouch, NoClip}` in `krit_movement` | §4.2 in `krit_core`; `Crouch` is a `Stance`; `Noclip` |
 | `CharacterController {}`, `MovementProfile {}` empty | §1.1, §8.2 |
